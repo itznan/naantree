@@ -4,8 +4,8 @@ description: Use when the user asks to build/fix/refactor something with several
 ---
 
 ### 1. WHAT THIS IS
-Naantree is a zero-dependency multi-agent coordination protocol that allows 2 to 20+ autonomous AI coding agents to collaborate safely within a single directory and branch.
-It manages dynamic identity allocation, serialized atomic commits, path claim locking, inter-agent messaging, peer reviews, quality gates, and coordinator failover.
+Naantree is a zero-dependency, cross-platform (Linux, macOS, Windows) multi-agent coordination protocol that allows 2 to 20+ autonomous AI coding agents to collaborate safely within a single directory and branch.
+It manages dynamic identity allocation, serialized atomic commits, path claim locking, inter-agent messaging, peer reviews, quality gates, PID recycling protection, coordinator failover, and machine-readable JSON output.
 CLI alias: `naantree` (written below as `nt`).
 
 ### 2. START (Run first, every time)
@@ -13,12 +13,13 @@ CLI alias: `naantree` (written below as `nt`).
 2. Run `nt join` (optionally with `--tags <tags>` or `--role-hint <hint>`).
 3. **TRUST YOUR JOIN OUTPUT**: Inspect the printed `role=coordinator|worker` and `coordinator_alive=true|false`. Do NOT assume agent-1 is the coordinator or guess roles from the user prompt. Role is decided by liveness.
 4. **ALWAYS PASS `--as agent-N`**: Tool calls execute in fresh subshells where environment variables (like `export NAANTREE_AGENT`) do not persist. Use the assigned prefix `--as agent-N` on every single command (e.g. `nt --as agent-N status`).
-5. Run `nt --as agent-N status` to inspect current swarm state.
+5. **USE `--json` FOR STRUCTURED PARSING**: For programmatic consumption, pass `--json` (e.g. `nt --json status`, `nt --as agent-N --json inbox`, `nt --as agent-N --json task list`) to receive stable, machine-readable JSON instead of parsing human text.
+6. Run `nt --as agent-N status` to inspect current swarm state.
 
 ### 3. IF YOU ARE THE COORDINATOR (`role=coordinator`)
 1. Read the user's prompt and inspect the repository.
 2. Initialize the plan: `nt --as agent-N plan init --goal "<goal>"`.
-3. Set verification gate early: `nt --as agent-N gate set "<test and lint command>"`. This runs a baseline check immediately to surface missing packages or environment errors.
+3. Set verification gate early: `nt --as agent-N gate set "<test and lint command>"`. This runs a baseline check immediately to surface missing packages or environment errors. Gate commands run outside the global lock with an automatic timeout (`NAANTREE_GATE_TIMEOUT_SECS`, default 300s).
 4. If prerequisites or toolchain setups are needed, add prerequisite tasks: `nt --as agent-N task add --title "<env setup>" --kind env --paths "<paths>"`. Environment tasks automatically gate subsequent code tasks.
 5. Decompose the goal into small, bite-sized tasks: `nt --as agent-N task add --title "<title>" --paths "<globs>" --size S|M --deps <deps>`. Keep each task scoped to ~30 min.
 6. Assign shared/hot files (e.g., config, schema, layout) behind one owner at a time.
@@ -32,7 +33,7 @@ CLI alias: `naantree` (written below as `nt`).
 2. As soon as ready tasks appear, enter the standard work loop below.
 
 ### 5. THE WORK LOOP (Every agent)
-1. Check inbox: `nt --as agent-N inbox --unread`. If unread needs-ack messages exist, answer or ack them: `nt --as agent-N ack <msgid>`.
+1. Check inbox: `nt --as agent-N inbox --unread` (or `nt --as agent-N --json inbox`). If unread needs-ack messages exist, answer or ack them: `nt --as agent-N ack <msgid>`.
 2. Claim a ready task: `nt --as agent-N task claim` (auto-claims the best matching task and its path globs).
 3. Work exclusively inside your claimed paths. Do not touch unclaimed files.
 4. Run your local test/build check to verify your changes.
@@ -43,7 +44,7 @@ CLI alias: `naantree` (written below as `nt`).
 9. Repeat. If no ready tasks exist: run `nt --as agent-N wait --timeout 120`. If idle for 3 consecutive waits, ask coordinator via `nt --as agent-N send`.
 
 ### 6. EXPLICIT ANTI-PATTERNS (Never do these)
-- **NEVER inspect system processes (`ps`, `pstree`, `pgrep`, `kill`)**: Naantree runs inside short-lived CLI invocations. Process trees reveal nothing about agent state.
+- **NEVER inspect system processes (`ps`, `pstree`, `pgrep`, `kill`)**: Naantree runs inside short-lived CLI invocations. Process trees reveal nothing about agent state. The CLI already handles PID liveness and recycling protection natively across Linux, macOS, and Windows.
 - **NEVER inspect other agents' internal files**: Do not read transcript logs, session memory, or private scratch files of other agents.
 - **NEVER guess or resume an arbitrary agent ID**: Never run `nt join --resume <id>` for an ID you were not personally given by `join`. Resuming live agents is forbidden.
 - **NEVER rely on shell exports**: Fresh tool call shells lose exported environment variables. Always pass `--as agent-N`.
@@ -77,7 +78,8 @@ CLI alias: `naantree` (written below as `nt`).
 
 ### 11. FINISHING
 - Only the coordinator may finish: run `nt --as agent-N gate run` to verify all tests pass, then run `nt --as agent-N finish`.
-- The CLI verifies all tasks are done, claims released, gate passed, and ACKs resolved, then writes `.naantree/FINAL_REPORT.md` and outputs `NAANTREE_COMPLETE`.
+- The quality gate runs outside the lock with timeout safety. If commits were merged by other agents while the gate was executing, the result is saved alongside the latest commit HEAD, and `finish` enforces that HEAD matches before declaring completion.
+- The CLI verifies all tasks are done, claims released, gate passed on latest HEAD, and ACKs resolved, then writes `.naantree/FINAL_REPORT.md` and outputs `NAANTREE_COMPLETE`.
 - All agents: When `NAANTREE_COMPLETE` appears, stop immediately and output a 5-line summary of contributions.
 
 ### 12. FAILURE MODES & FAILOVER
@@ -85,7 +87,8 @@ CLI alias: `naantree` (written below as `nt`).
 - **Lock held**: Retry command automatically; the CLI handles contention with exponential backoff and stale lock reclamation.
 - **Claims expired**: Re-claim with `nt --as agent-N claim <paths>`.
 - **Marked stale after inactivity**: Resume your own assigned identity with `nt --as agent-N join --resume agent-N --force`.
-- **CLI anomaly / health check failure**: Run `nt doctor` to inspect swarm invariants and health.
+- **PID recycling**: Session files track process creation timestamps to protect identity files from recycled parent shell PIDs.
+- **CLI anomaly / health check failure**: Run `nt doctor` to inspect swarm invariants, lock state, and PID liveness.
 
 ### 13. READY-TO-PASTE USER PROMPT TEMPLATE
 Paste this identical prompt to all agents in the swarm:
@@ -95,8 +98,9 @@ You are collaborating on a shared codebase on a single git branch using the naan
 1. Run `naantree doctor` then `naantree join`.
 2. Inspect the printed output: observe your assigned agent ID (`agent-N`) and role (`role=coordinator` or `role=worker`). Do not assume agent-1 is coordinator.
 3. On every subsequent command, always explicitly pass `--as agent-N` (e.g. `naantree --as agent-N ...`).
-4. If you are coordinator: run `naantree plan init --goal "..."`, set gate with `naantree gate set "..."`, decompose tasks with `naantree task add`, and notify workers.
-5. If you are worker: run `naantree wait --for task --timeout 120`. If no coordinator is alive, run `naantree coordinator claim`.
-6. Follow the naantree work loop (claim task, edit claimed files, test, commit, review, mark done, release claims).
+4. You can pass `--json` on any command for reliable structured JSON output.
+5. If you are coordinator: run `naantree plan init --goal "..."`, set gate with `naantree gate set "..."`, decompose tasks with `naantree task add`, and notify workers.
+6. If you are worker: run `naantree wait --for task --timeout 120`. If no coordinator is alive, run `naantree coordinator claim`.
+7. Follow the naantree work loop (claim task, edit claimed files, test, commit, review, mark done, release claims).
 Goal: <INSERT USER GOAL HERE>
 ```
