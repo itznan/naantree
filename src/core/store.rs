@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::ids::{extract_id_num, next_evt_id};
@@ -130,6 +130,8 @@ pub struct GateResult {
     pub output: String,
     pub exit_code: i32,
     pub timestamp: u64,
+    #[serde(default)]
+    pub git_head: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -284,7 +286,10 @@ impl Store {
         let mut coordinator_was_reaped = false;
 
         for agent in &mut agents_data.agents {
-            if !agent.is_stale && agent.left_at.is_none() && now.saturating_sub(agent.last_heartbeat) > stale_timeout_ms {
+            if !agent.is_stale
+                && agent.left_at.is_none()
+                && now.saturating_sub(agent.last_heartbeat) > stale_timeout_ms
+            {
                 agent.is_stale = true;
                 reaped.push(agent.id.clone());
                 if agent.role == "coordinator" {
@@ -311,14 +316,18 @@ impl Store {
                 }
             }
         }
-        claims_data.claims.retain(|c| !reaped_set.contains(&c.agent_id));
+        claims_data
+            .claims
+            .retain(|c| !reaped_set.contains(&c.agent_id));
         self.save_claims(&claims_data)?;
 
         // 2. Return tasks doing/review by reaped agents to todo
         let mut tasks_data = self.load_tasks();
         for task in &mut tasks_data.tasks {
             if let Some(assignee) = &task.assignee {
-                if reaped_set.contains(assignee) && (task.state == "doing" || task.state == "review") {
+                if reaped_set.contains(assignee)
+                    && (task.state == "doing" || task.state == "review")
+                {
                     task.state = "todo".to_string();
                     task.assignee = None;
                     task.updated_at = now;
@@ -371,7 +380,9 @@ impl Store {
             .map(|(idx, _)| idx)
             .collect();
         if live_coordinators.len() > 1 {
-            live_coordinators.sort_by_key(|&idx| extract_id_num(&agents_data.agents[idx].id).unwrap_or(u64::MAX));
+            live_coordinators.sort_by_key(|&idx| {
+                extract_id_num(&agents_data.agents[idx].id).unwrap_or(u64::MAX)
+            });
             for &idx in &live_coordinators[1..] {
                 agents_data.agents[idx].role = "worker".to_string();
                 let demoted_id = agents_data.agents[idx].id.clone();

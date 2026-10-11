@@ -1,4 +1,3 @@
-use std::fs;
 use crate::core::context::{
     get_grandparent_pid, get_parent_pid, get_session_key, get_tty_name, Context,
 };
@@ -6,6 +5,7 @@ use crate::core::format::CommandOutput;
 use crate::core::ids::{extract_id_num, next_agent_id};
 use crate::core::lock::{current_time_ms, with_lock};
 use crate::core::store::Agent;
+use std::fs;
 
 pub fn run_join(
     ctx: &Context,
@@ -24,10 +24,9 @@ pub fn run_join(
         // Check resume
         if let Some(res_id) = resume {
             // Check if another live coordinator exists
-            let other_live_coordinator = agents_data
-                .agents
-                .iter()
-                .any(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none() && a.id != res_id);
+            let other_live_coordinator = agents_data.agents.iter().any(|a| {
+                a.role == "coordinator" && !a.is_stale && a.left_at.is_none() && a.id != res_id
+            });
 
             let agent = agents_data
                 .agents
@@ -224,11 +223,9 @@ pub fn run_coordinator_claim(ctx: &Context) -> Result<CommandOutput, String> {
         let now = current_time_ms();
 
         // Check if another live coordinator exists
-        if let Some(live_coord) = agents_data
-            .agents
-            .iter()
-            .find(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none() && a.id != agent_id)
-        {
+        if let Some(live_coord) = agents_data.agents.iter().find(|a| {
+            a.role == "coordinator" && !a.is_stale && a.left_at.is_none() && a.id != agent_id
+        }) {
             return Err(format!(
                 "Cannot claim coordinator role: active coordinator '{}' is still alive",
                 live_coord.id
@@ -371,7 +368,9 @@ pub fn run_leave(ctx: &Context) -> Result<CommandOutput, String> {
         // Return doing/review tasks to todo
         let mut tasks_data = ctx.store.load_tasks();
         for t in &mut tasks_data.tasks {
-            if t.assignee.as_deref() == Some(&agent_id) && (t.state == "doing" || t.state == "review") {
+            if t.assignee.as_deref() == Some(&agent_id)
+                && (t.state == "doing" || t.state == "review")
+            {
                 t.state = "todo".to_string();
                 t.assignee = None;
                 t.updated_at = now;

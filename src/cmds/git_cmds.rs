@@ -122,7 +122,10 @@ pub fn run_push(ctx: &Context) -> Result<CommandOutput, String> {
 
         let meta = ctx.store.load_meta();
         if !meta.allow_push {
-            return Err("Pushing to remote is not allowed by current plan (allow_push is false).".to_string());
+            return Err(
+                "Pushing to remote is not allowed by current plan (allow_push is false)."
+                    .to_string(),
+            );
         }
 
         let res = git_push(&ctx.repo_root)?;

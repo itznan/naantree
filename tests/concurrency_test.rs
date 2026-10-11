@@ -23,7 +23,10 @@ fn test_concurrency_10_agents() {
     let temp_dir = std::env::temp_dir().join(format!(
         "naantree_concurrency_{}_{}",
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
     ));
 
     fs::create_dir_all(&temp_dir).unwrap();
@@ -31,7 +34,11 @@ fn test_concurrency_10_agents() {
     // 1. Initialize git repo
     run_cmd(&temp_dir, "git", &["init", "-b", "main"]);
     run_cmd(&temp_dir, "git", &["config", "user.name", "Tester"]);
-    run_cmd(&temp_dir, "git", &["config", "user.email", "tester@example.com"]);
+    run_cmd(
+        &temp_dir,
+        "git",
+        &["config", "user.email", "tester@example.com"],
+    );
 
     // Initial commit
     fs::write(temp_dir.join("init.txt"), "init\n").unwrap();
@@ -43,12 +50,22 @@ fn test_concurrency_10_agents() {
     // Coordinator joins and sets up plan & 10 tasks
     let (code, out, err) = run_cmd(&temp_dir, naantree_bin, &["join", "--tags", "coord"]);
     assert_eq!(code, 0, "Coordinator join failed: {}\n{}", out, err);
-    assert!(out.contains("role=coordinator"), "First agent must be coordinator");
+    assert!(
+        out.contains("role=coordinator"),
+        "First agent must be coordinator"
+    );
 
     let (code, out, err) = run_cmd(
         &temp_dir,
         naantree_bin,
-        &["--as", "agent-1", "plan", "init", "--goal", "Test Concurrency"],
+        &[
+            "--as",
+            "agent-1",
+            "plan",
+            "init",
+            "--goal",
+            "Test Concurrency",
+        ],
     );
     assert_eq!(code, 0, "Plan init failed: {}\n{}", out, err);
 
@@ -61,15 +78,7 @@ fn test_concurrency_10_agents() {
             &temp_dir,
             naantree_bin,
             &[
-                "--as",
-                "agent-1",
-                "task",
-                "add",
-                "--title",
-                &title,
-                "--paths",
-                &path,
-                "--size",
+                "--as", "agent-1", "task", "add", "--title", &title, "--paths", &path, "--size",
                 "S",
             ],
         );
@@ -90,12 +99,13 @@ fn test_concurrency_10_agents() {
             let bin_str = bin.to_str().unwrap();
 
             // 1. Join
-            let (code, join_out, join_err) = run_cmd(
-                &repo,
-                bin_str,
-                &["join", "--tags", "worker", "--json"],
+            let (code, join_out, join_err) =
+                run_cmd(&repo, bin_str, &["join", "--tags", "worker", "--json"]);
+            assert_eq!(
+                code, 0,
+                "Worker {} join failed: {}\n{}",
+                worker_idx, join_out, join_err
             );
-            assert_eq!(code, 0, "Worker {} join failed: {}\n{}", worker_idx, join_out, join_err);
 
             let json: serde_json::Value = serde_json::from_str(&join_out).expect("Parse join json");
             let my_id = json["agent"].as_str().expect("agent id").to_string();
@@ -105,13 +115,11 @@ fn test_concurrency_10_agents() {
             let mut claimed_path = String::new();
 
             for _retry in 0..30 {
-                let (claim_code, claim_out, _) = run_cmd(
-                    &repo,
-                    bin_str,
-                    &["--as", &my_id, "task", "claim", "--json"],
-                );
+                let (claim_code, claim_out, _) =
+                    run_cmd(&repo, bin_str, &["--as", &my_id, "task", "claim", "--json"]);
                 if claim_code == 0 {
-                    let task_json: serde_json::Value = serde_json::from_str(&claim_out).expect("Parse claim json");
+                    let task_json: serde_json::Value =
+                        serde_json::from_str(&claim_out).expect("Parse claim json");
                     claimed_task_id = task_json["id"].as_str().unwrap_or("").to_string();
                     if let Some(paths) = task_json["claimed_paths"].as_array() {
                         if let Some(p) = paths.first().and_then(|v| v.as_str()) {
@@ -131,18 +139,29 @@ fn test_concurrency_10_agents() {
 
             // 3. Do work on claimed file
             let file_to_edit = repo.join(&claimed_path);
-            fs::write(&file_to_edit, format!("Content by {} for {}\n", my_id, claimed_task_id)).unwrap();
+            fs::write(
+                &file_to_edit,
+                format!("Content by {} for {}\n", my_id, claimed_task_id),
+            )
+            .unwrap();
 
             // 4. Commit
             let msg = format!("Work on {} by {}", claimed_task_id, my_id);
             let (commit_code, commit_out, commit_err) = run_cmd(
                 &repo,
                 bin_str,
-                &["--as", &my_id, "commit", "-m", &msg, "--files", &claimed_path],
+                &[
+                    "--as",
+                    &my_id,
+                    "commit",
+                    "-m",
+                    &msg,
+                    "--files",
+                    &claimed_path,
+                ],
             );
             assert_eq!(
-                commit_code,
-                0,
+                commit_code, 0,
                 "Agent {} commit failed: {}\n{}",
                 my_id, commit_out, commit_err
             );
@@ -163,25 +182,44 @@ fn test_concurrency_10_agents() {
     agent_ids.sort();
     let original_len = agent_ids.len();
     agent_ids.dedup();
-    assert_eq!(agent_ids.len(), original_len, "All agent IDs must be unique: {:?}", agent_ids);
+    assert_eq!(
+        agent_ids.len(),
+        original_len,
+        "All agent IDs must be unique: {:?}",
+        agent_ids
+    );
 
     // 2. No double-claimed task: all 10 claimed task IDs are distinct
     let mut task_ids: Vec<String> = results.iter().map(|(_, t, _)| t.clone()).collect();
     task_ids.sort();
     task_ids.dedup();
-    assert_eq!(task_ids.len(), 10, "All 10 tasks must be claimed uniquely without duplicates: {:?}", task_ids);
+    assert_eq!(
+        task_ids.len(),
+        10,
+        "All 10 tasks must be claimed uniquely without duplicates: {:?}",
+        task_ids
+    );
 
     // 3. No overlapping paths
     let mut paths: Vec<String> = results.iter().map(|(_, _, p)| p.clone()).collect();
     paths.sort();
     paths.dedup();
-    assert_eq!(paths.len(), 10, "All 10 claimed paths must be unique: {:?}", paths);
+    assert_eq!(
+        paths.len(),
+        10,
+        "All 10 claimed paths must be unique: {:?}",
+        paths
+    );
 
     // 4. Check git linear history:
     // Initial commit (1) + 10 worker commits = 11 commits total
     let (code, git_log_out, _) = run_cmd(&temp_dir, "git", &["rev-list", "--count", "HEAD"]);
     assert_eq!(code, 0);
-    assert_eq!(git_log_out.trim(), "11", "Git must have exactly 11 commits (1 init + 10 workers)");
+    assert_eq!(
+        git_log_out.trim(),
+        "11",
+        "Git must have exactly 11 commits (1 init + 10 workers)"
+    );
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);

@@ -1,10 +1,10 @@
-use std::fs;
-use std::process::Command;
 use crate::core::context::Context;
 use crate::core::format::CommandOutput;
 use crate::core::git::get_short_head;
 use crate::core::lock::{current_time_ms, with_lock};
 use crate::core::store::{Decision, Event, GateResult, Message, TaskReview};
+use std::fs;
+use std::process::Command;
 
 pub fn run_review_request(
     ctx: &Context,
@@ -36,7 +36,10 @@ pub fn run_review_request(
         )?;
 
         Ok(CommandOutput::new()
-            .line(format!("id={} state=review requested_to={}", task_id, target))
+            .line(format!(
+                "id={} state=review requested_to={}",
+                task_id, target
+            ))
             .json(&serde_json::json!({
                 "id": task_id,
                 "state": "review",
@@ -62,7 +65,9 @@ pub fn run_review_result(
             .ok_or_else(|| format!("Task {} not found", task_id))?;
 
         if task.assignee.as_deref() == Some(&agent_id) {
-            return Err("Cannot review your own task. Review must come from a different agent.".to_string());
+            return Err(
+                "Cannot review your own task. Review must come from a different agent.".to_string(),
+            );
         }
 
         let is_approve = verdict == "approve";
@@ -97,8 +102,17 @@ pub fn run_review_result(
             updated_messages.push(m);
         }
         let target_file = ctx.state_dir.join("messages.jsonl");
-        let tmp = ctx.state_dir.join(format!("messages.tmp.{}.{}", std::process::id(), current_time_ms()));
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp) {
+        let tmp = ctx.state_dir.join(format!(
+            "messages.tmp.{}.{}",
+            std::process::id(),
+            current_time_ms()
+        ));
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)
+        {
             for m in &updated_messages {
                 if let Ok(mut line) = serde_json::to_string(m) {
                     line.push('\n');
@@ -142,55 +156,59 @@ pub fn run_review_result(
 
 pub fn run_gate_set(ctx: &Context, cmd: String) -> Result<CommandOutput, String> {
     let agent_id = ctx.require_agent()?;
+    let agents_data = ctx.store.load_agents();
+    let agent = agents_data
+        .agents
+        .iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+
+    if agent.role != "coordinator" {
+        return Err(
+            "Only the coordinator can configure the verification gate (gate set).".to_string(),
+        );
+    }
+
+    // Run baseline check outside global lock
+    let output = if cfg!(windows) {
+        Command::new("cmd")
+            .arg("/C")
+            .arg(&cmd)
+            .current_dir(&ctx.repo_root)
+            .output()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .current_dir(&ctx.repo_root)
+            .output()
+    }
+    .map_err(|e| format!("Failed to execute gate command for baseline check: {}", e))?;
+
+    let pass = output.status.success();
+    let code = output.status.code().unwrap_or(if pass { 0 } else { 1 });
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}{}", stdout, stderr);
+
+    let lines_out: Vec<&str> = combined.lines().collect();
+    let last_30 = if lines_out.len() > 30 {
+        lines_out[lines_out.len() - 30..].join("\n")
+    } else {
+        combined.clone()
+    };
+
+    let git_head = get_short_head(&ctx.repo_root).ok();
+    let result = GateResult {
+        pass,
+        cmd: cmd.clone(),
+        output: last_30.clone(),
+        exit_code: code,
+        timestamp: current_time_ms(),
+        git_head,
+    };
+
     with_lock(&ctx.state_dir, &agent_id, || {
-        let agents_data = ctx.store.load_agents();
-        let agent = agents_data
-            .agents
-            .iter()
-            .find(|a| a.id == agent_id)
-            .ok_or_else(|| format!("Agent {} not found", agent_id))?;
-
-        if agent.role != "coordinator" {
-            return Err("Only the coordinator can configure the verification gate (gate set).".to_string());
-        }
-
-        // Run baseline check once
-        let output = if cfg!(windows) {
-            Command::new("cmd")
-                .arg("/C")
-                .arg(&cmd)
-                .current_dir(&ctx.repo_root)
-                .output()
-        } else {
-            Command::new("sh")
-                .arg("-c")
-                .arg(&cmd)
-                .current_dir(&ctx.repo_root)
-                .output()
-        }
-        .map_err(|e| format!("Failed to execute gate command for baseline check: {}", e))?;
-
-        let pass = output.status.success();
-        let code = output.status.code().unwrap_or(if pass { 0 } else { 1 });
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{}{}", stdout, stderr);
-
-        let lines_out: Vec<&str> = combined.lines().collect();
-        let last_30 = if lines_out.len() > 30 {
-            lines_out[lines_out.len() - 30..].join("\n")
-        } else {
-            combined.clone()
-        };
-
-        let result = GateResult {
-            pass,
-            cmd: cmd.clone(),
-            output: last_30.clone(),
-            exit_code: code,
-            timestamp: current_time_ms(),
-        };
-
         let mut meta = ctx.store.load_meta();
         meta.gate_cmd = Some(cmd.clone());
         meta.gate_last_result = Some(result);
@@ -205,83 +223,105 @@ pub fn run_gate_set(ctx: &Context, cmd: String) -> Result<CommandOutput, String>
                 "baseline_exit_code": code
             }),
         );
+        Ok(())
+    })?;
 
-        let baseline_status = if pass { "PASS" } else { "FAIL" };
-        let mut out = CommandOutput::new();
-        out = out.line(format!(
-            "gate_cmd=\"{}\" coordinator={} baseline={}",
-            cmd, agent_id, baseline_status
-        ));
-        out = out.line(format!("gate_baseline={} exit_code={}", baseline_status, code));
-        for l in last_30.lines() {
-            out = out.line(l.to_string());
-        }
+    let baseline_status = if pass { "PASS" } else { "FAIL" };
+    let mut out = CommandOutput::new();
+    out = out.line(format!(
+        "gate_cmd=\"{}\" coordinator={} baseline={}",
+        cmd, agent_id, baseline_status
+    ));
+    out = out.line(format!(
+        "gate_baseline={} exit_code={}",
+        baseline_status, code
+    ));
+    for l in last_30.lines() {
+        out = out.line(l.to_string());
+    }
 
-        let next_hint = if pass {
-            "naantree status"
-        } else {
-            "naantree task add --kind env"
-        };
+    let next_hint = if pass {
+        "naantree status"
+    } else {
+        "naantree task add --kind env"
+    };
 
-        Ok(out
-            .json(&serde_json::json!({
-                "gate_cmd": cmd,
-                "coordinator": agent_id,
-                "baseline": {
-                    "pass": pass,
-                    "status": baseline_status,
-                    "exit_code": code,
-                    "output": last_30
-                }
-            }))
-            .next(next_hint))
-    })
+    Ok(out
+        .json(&serde_json::json!({
+            "gate_cmd": cmd,
+            "coordinator": agent_id,
+            "baseline": {
+                "pass": pass,
+                "status": baseline_status,
+                "exit_code": code,
+                "output": last_30
+            }
+        }))
+        .next(next_hint))
 }
 
 pub fn run_gate_run(ctx: &Context) -> Result<CommandOutput, String> {
     let agent_id = ctx.require_agent()?;
+    let gate_cmd = {
+        let meta = ctx.store.load_meta();
+        meta.gate_cmd.clone().ok_or_else(|| {
+            "No gate command configured. Use 'naantree gate set <cmd>' first.".to_string()
+        })?
+    };
+
+    let initial_head = get_short_head(&ctx.repo_root).ok();
+
+    // Run gate command outside the global lock
+    let output = if cfg!(windows) {
+        Command::new("cmd")
+            .arg("/C")
+            .arg(&gate_cmd)
+            .current_dir(&ctx.repo_root)
+            .output()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(&gate_cmd)
+            .current_dir(&ctx.repo_root)
+            .output()
+    }
+    .map_err(|e| format!("Failed to execute gate command: {}", e))?;
+
+    let pass = output.status.success();
+    let code = output.status.code().unwrap_or(if pass { 0 } else { 1 });
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}{}", stdout, stderr);
+
+    let lines: Vec<&str> = combined.lines().collect();
+    let last_30 = if lines.len() > 30 {
+        lines[lines.len() - 30..].join("\n")
+    } else {
+        combined.clone()
+    };
+
+    let result = GateResult {
+        pass,
+        cmd: gate_cmd.clone(),
+        output: last_30.clone(),
+        exit_code: code,
+        timestamp: current_time_ms(),
+        git_head: initial_head.clone(),
+    };
+
     with_lock(&ctx.state_dir, &agent_id, || {
-        let mut meta = ctx.store.load_meta();
-        let gate_cmd = meta
-            .gate_cmd
-            .clone()
-            .ok_or_else(|| "No gate command configured. Use 'naantree gate set <cmd>' first.".to_string())?;
-
-        let output = if cfg!(windows) {
-            Command::new("cmd")
-                .arg("/C")
-                .arg(&gate_cmd)
-                .current_dir(&ctx.repo_root)
-                .output()
-        } else {
-            Command::new("sh")
-                .arg("-c")
-                .arg(&gate_cmd)
-                .current_dir(&ctx.repo_root)
-                .output()
+        let current_head = get_short_head(&ctx.repo_root).ok();
+        if initial_head != current_head {
+            return Err(format!(
+                "Repository HEAD changed during gate run (was {:?}, now {:?}). Discarding stale gate result. Please re-run.",
+                initial_head, current_head
+            ));
         }
-        .map_err(|e| format!("Failed to execute gate command: {}", e))?;
 
-        let pass = output.status.success();
-        let code = output.status.code().unwrap_or(if pass { 0 } else { 1 });
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{}{}", stdout, stderr);
-
-        let lines: Vec<&str> = combined.lines().collect();
-        let last_30 = if lines.len() > 30 {
-            lines[lines.len() - 30..].join("\n")
-        } else {
-            combined.clone()
-        };
-
-        let result = GateResult {
-            pass,
-            cmd: gate_cmd.clone(),
-            output: last_30.clone(),
-            exit_code: code,
-            timestamp: current_time_ms(),
-        };
+        let mut meta = ctx.store.load_meta();
+        if meta.gate_cmd.as_deref() != Some(&gate_cmd) {
+            return Err("Gate command was reconfigured during execution. Discarding stale gate result. Please re-run.".to_string());
+        }
 
         meta.gate_last_result = Some(result);
         ctx.store.save_meta(&meta)?;
@@ -292,28 +332,34 @@ pub fn run_gate_run(ctx: &Context) -> Result<CommandOutput, String> {
             serde_json::json!({
                 "cmd": gate_cmd,
                 "pass": pass,
-                "exit_code": code
+                "exit_code": code,
+                "git_head": current_head
             }),
         );
+        Ok(())
+    })?;
 
-        let status_str = if pass { "PASS" } else { "FAIL" };
-        let mut out = CommandOutput::new();
-        out = out.line(format!("gate={} exit_code={}", status_str, code));
-        for l in last_30.lines() {
-            out = out.line(l.to_string());
-        }
+    let status_str = if pass { "PASS" } else { "FAIL" };
+    let mut out = CommandOutput::new();
+    out = out.line(format!("gate={} exit_code={}", status_str, code));
+    for l in last_30.lines() {
+        out = out.line(l.to_string());
+    }
 
-        let next_hint = if pass { "naantree finish" } else { "naantree status" };
+    let next_hint = if pass {
+        "naantree finish"
+    } else {
+        "naantree status"
+    };
 
-        Ok(out
-            .json(&serde_json::json!({
-                "gate": status_str,
-                "pass": pass,
-                "exit_code": code,
-                "output": last_30
-            }))
-            .next(next_hint))
-    })
+    Ok(out
+        .json(&serde_json::json!({
+            "gate": status_str,
+            "pass": pass,
+            "exit_code": code,
+            "output": last_30
+        }))
+        .next(next_hint))
 }
 
 pub fn run_finish(ctx: &Context) -> Result<CommandOutput, String> {
@@ -361,13 +407,25 @@ pub fn run_finish(ctx: &Context) -> Result<CommandOutput, String> {
             if !gate_result.pass {
                 return Err("Refusing finish: Verification gate has not passed. Run 'naantree gate run' and ensure it passes.".to_string());
             }
+            if let Some(gate_head) = &gate_result.git_head {
+                let current_head = get_short_head(&ctx.repo_root).unwrap_or_default();
+                if gate_head != &current_head {
+                    return Err(format!(
+                        "Refusing finish: Verification gate was run on commit '{}' but current HEAD is '{}'. Run 'naantree gate run' on current HEAD first.",
+                        gate_head, current_head
+                    ));
+                }
+            }
         } else if meta.gate_cmd.is_some() {
             return Err("Refusing finish: Gate command is set but has not been run. Run 'naantree gate run' first.".to_string());
         }
 
         // Check inbox for unacked needs-ack messages
         let messages: Vec<Message> = ctx.store.read_jsonl("messages.jsonl");
-        let unacked_count = messages.iter().filter(|m| m.needs_ack && m.ack_by.is_empty()).count();
+        let unacked_count = messages
+            .iter()
+            .filter(|m| m.needs_ack && m.ack_by.is_empty())
+            .count();
         if unacked_count > 0 {
             return Err(format!(
                 "Refusing finish: {} message(s) requiring ack remain unacknowledged in inbox.",
@@ -379,11 +437,15 @@ pub fn run_finish(ctx: &Context) -> Result<CommandOutput, String> {
         let report_path = ctx.repo_root.join(".naantree").join("FINAL_REPORT.md");
         let decisions: Vec<Decision> = ctx.store.read_jsonl("decisions.jsonl");
         let human_queue_path = ctx.repo_root.join(".naantree").join("HUMAN_QUEUE.md");
-        let human_queue_content = fs::read_to_string(human_queue_path).unwrap_or_else(|_| "None".to_string());
+        let human_queue_content =
+            fs::read_to_string(human_queue_path).unwrap_or_else(|_| "None".to_string());
 
         let mut report = String::new();
         report.push_str("# NAANTREE FINAL REPORT\n\n");
-        report.push_str(&format!("**Goal:** {}\n\n", meta.goal.as_deref().unwrap_or("N/A")));
+        report.push_str(&format!(
+            "**Goal:** {}\n\n",
+            meta.goal.as_deref().unwrap_or("N/A")
+        ));
         report.push_str(&format!("**Coordinator:** {}\n\n", agent_id));
         report.push_str("## Completed Tasks\n\n");
         for t in &tasks_data.tasks {
@@ -412,7 +474,8 @@ pub fn run_finish(ctx: &Context) -> Result<CommandOutput, String> {
         report.push_str(&human_queue_content);
         report.push_str("\n\n---\n**Status:** NAANTREE_COMPLETE\n");
 
-        fs::write(&report_path, report).map_err(|e| format!("Failed to write final report: {}", e))?;
+        fs::write(&report_path, report)
+            .map_err(|e| format!("Failed to write final report: {}", e))?;
 
         meta.finished = true;
         meta.finished_at = Some(current_time_ms());
@@ -509,7 +572,10 @@ pub fn run_doctor(ctx: &Context) -> Result<CommandOutput, String> {
     if has_gitignore && has_exclude {
         lines.push("[OK] State directory ignored in .gitignore and .git/info/exclude".to_string());
     } else {
-        lines.push("[WARN] .naantree/state not properly ignored in .gitignore or .git/info/exclude".to_string());
+        lines.push(
+            "[WARN] .naantree/state not properly ignored in .gitignore or .git/info/exclude"
+                .to_string(),
+        );
     }
 
     // 5. Hooks
@@ -517,7 +583,9 @@ pub fn run_doctor(ctx: &Context) -> Result<CommandOutput, String> {
     if hook_path.exists() {
         lines.push("[OK] Pre-commit hook installed".to_string());
     } else {
-        lines.push("[INFO] Pre-commit hook not installed (run 'naantree hooks install')".to_string());
+        lines.push(
+            "[INFO] Pre-commit hook not installed (run 'naantree hooks install')".to_string(),
+        );
     }
 
     // 6. Swarm Invariant Checks
@@ -536,7 +604,10 @@ pub fn run_doctor(ctx: &Context) -> Result<CommandOutput, String> {
 
     if live_coordinators.len() > 1 {
         let ids: Vec<&str> = live_coordinators.iter().map(|a| a.id.as_str()).collect();
-        violations.push(format!("Multiple live coordinators detected: {}", ids.join(", ")));
+        violations.push(format!(
+            "Multiple live coordinators detected: {}",
+            ids.join(", ")
+        ));
     }
 
     if !agents_data.agents.is_empty() && live_coordinators.is_empty() {

@@ -84,12 +84,60 @@ pub fn find_repo_root() -> Result<PathBuf, String> {
     env::current_dir().map_err(|e| e.to_string())
 }
 
+#[cfg(windows)]
+struct AutoCloseHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for AutoCloseHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() && self.0 != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.0);
+            }
+        }
+    }
+}
+
 pub fn get_parent_pid() -> u32 {
     #[cfg(unix)]
     {
         std::os::unix::process::parent_id()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
+            TH32CS_SNAPPROCESS,
+        };
+
+        let current_pid = std::process::id();
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return current_pid;
+            }
+            let _guard = AutoCloseHandle(snapshot);
+
+            let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+
+            let mut ppid = current_pid;
+            if Process32First(snapshot, &mut entry) != 0 {
+                loop {
+                    if entry.th32ProcessID == current_pid {
+                        ppid = entry.th32ParentProcessID;
+                        break;
+                    }
+                    if Process32Next(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            ppid
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         std::process::id()
     }
@@ -114,7 +162,42 @@ pub fn get_grandparent_pid(parent_pid: u32) -> Option<u32> {
         }
         None
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
+            TH32CS_SNAPPROCESS,
+        };
+
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let _guard = AutoCloseHandle(snapshot);
+
+            let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+
+            let mut gppid = None;
+            if Process32First(snapshot, &mut entry) != 0 {
+                loop {
+                    if entry.th32ProcessID == parent_pid {
+                        if entry.th32ParentProcessID > 1 {
+                            gppid = Some(entry.th32ParentProcessID);
+                        }
+                        break;
+                    }
+                    if Process32Next(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            gppid
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = parent_pid;
         None
@@ -129,9 +212,7 @@ pub fn get_tty_name() -> Option<String> {
             .ok()?;
         let path_str = link.to_string_lossy();
         if path_str.starts_with("/dev/pts/") || path_str.starts_with("/dev/tty") {
-            let sanitized = path_str
-                .trim_start_matches("/dev/")
-                .replace('/', "_");
+            let sanitized = path_str.trim_start_matches("/dev/").replace('/', "_");
             return Some(sanitized);
         }
     }
@@ -146,15 +227,126 @@ pub fn is_pid_alive(pid: u32) -> bool {
     {
         Path::new(&format!("/proc/{}", pid)).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            GetLastError, ERROR_ACCESS_DENIED, FALSE, STILL_ACTIVE, WAIT_TIMEOUT,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        unsafe {
+            let raw_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if raw_handle.is_null() {
+                let err = GetLastError();
+                return err == ERROR_ACCESS_DENIED;
+            }
+            let _guard = AutoCloseHandle(raw_handle);
+            let mut exit_code = 0u32;
+            if GetExitCodeProcess(raw_handle, &mut exit_code) != FALSE {
+                if exit_code == STILL_ACTIVE as u32 {
+                    WaitForSingleObject(raw_handle, 0) == WAIT_TIMEOUT
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         std::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
             .output()
             .map(|o| o.status.success())
-            .unwrap_or(true)
+            .unwrap_or(false)
     }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+pub fn get_process_start_time(pid: u32) -> Option<u64> {
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let stat_path = format!("/proc/{}/stat", pid);
+        if let Ok(content) = fs::read_to_string(stat_path) {
+            if let Some(idx) = content.rfind(')') {
+                let rest = content[idx + 1..].trim();
+                let fields: Vec<&str> = rest.split_whitespace().collect();
+                if fields.len() >= 20 {
+                    if let Ok(starttime) = fields[19].parse::<u64>() {
+                        return Some(starttime);
+                    }
+                }
+            }
+        }
+        None
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{FALSE, FILETIME};
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        unsafe {
+            let raw_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if raw_handle.is_null() {
+                return None;
+            }
+            let _guard = AutoCloseHandle(raw_handle);
+            let mut creation = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut exit = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut kernel = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut user = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+
+            if GetProcessTimes(raw_handle, &mut creation, &mut exit, &mut kernel, &mut user)
+                != FALSE
+            {
+                Some(((creation.dwHighDateTime as u64) << 32) | (creation.dwLowDateTime as u64))
+            } else {
+                None
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+pub fn is_pid_alive_matching(pid: u32, expected_start_time: Option<u64>) -> bool {
+    if !is_pid_alive(pid) {
+        return false;
+    }
+    if let Some(expected) = expected_start_time {
+        if let Some(actual) = get_process_start_time(pid) {
+            return actual == expected;
+        }
+    }
+    true
 }
 
 pub fn get_session_key() -> Option<String> {

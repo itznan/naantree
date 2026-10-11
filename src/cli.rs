@@ -1,7 +1,14 @@
 use clap::{Parser, Subcommand};
 
+const VERSION_INFO: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")");
+
 #[derive(Parser, Debug)]
-#[command(name = "naantree", author, version, about = "Modular multi-agent coordination CLI")]
+#[command(
+    name = "naantree",
+    author,
+    version = VERSION_INFO,
+    about = "Modular multi-agent coordination CLI"
+)]
 pub struct Cli {
     #[arg(long, global = true, help = "Run as specified agent ID")]
     pub r#as: Option<String>,
@@ -132,14 +139,10 @@ pub enum Commands {
     },
 
     #[command(about = "Acknowledge a message")]
-    Ack {
-        msg_id: String,
-    },
+    Ack { msg_id: String },
 
     #[command(about = "View message thread")]
-    Thread {
-        ref_id: String,
-    },
+    Thread { ref_id: String },
 
     #[command(about = "Wait for new events without burning tokens")]
     Wait {
@@ -237,9 +240,7 @@ pub enum TaskSubcommand {
     },
 
     #[command(about = "Accept proposed task")]
-    Accept {
-        id: String,
-    },
+    Accept { id: String },
 
     #[command(about = "List tasks")]
     List {
@@ -252,9 +253,7 @@ pub enum TaskSubcommand {
     },
 
     #[command(about = "Claim a task")]
-    Claim {
-        id: Option<String>,
-    },
+    Claim { id: Option<String> },
 
     #[command(about = "Update a task")]
     Update {
@@ -318,9 +317,7 @@ pub enum ReviewSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum GateSubcommand {
     #[command(about = "Set verification command")]
-    Set {
-        cmd: String,
-    },
+    Set { cmd: String },
     #[command(about = "Run verification command under lock")]
     Run,
 }
@@ -330,4 +327,3 @@ pub enum CoordinatorSubcommand {
     #[command(about = "Claim the coordinator role if the current coordinator is stale")]
     Claim,
 }
-

@@ -4,8 +4,6 @@ on:
   release:
     types: [published, created]
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:

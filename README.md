@@ -1,5 +1,8 @@
 # Naantree
 
+[![CI](https://github.com/itznan/naantree/actions/workflows/ci.yml/badge.svg)](https://github.com/itznan/naantree/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Modular Multi-Agent Coordination Protocol & CLI**
 
 Naantree allows 2 to 20+ autonomous AI coding agents to collaborate safely in the **same repository folder** and on the **same git branch**. Agents are given an identical prompt and autonomously organize: they auto-assign identities, elect a coordinator, decompose work into collision-free tasks, communicate, conduct peer reviews, and safely finish.
@@ -64,6 +67,99 @@ npx skills add -g itznan/naantree-skill
 
 ---
 
+## Agent Lifecycle
+
+```mermaid
+flowchart TD
+    Join["1. Join Swarm (naantree join)<br/>Auto-elects Coordinator or Worker"] --> Plan["2. Plan & Tasks (naantree plan init / task add)"]
+    Plan --> Ready["3. Ready Task Picked (naantree task list --ready)"]
+    Ready --> ClaimTask["4. Claim Task & Paths (naantree task claim)"]
+    ClaimTask --> Code["5. Edit Code on Claimed Paths"]
+    Code --> Commit["6. Atomic Rebase Commit (naantree commit)"]
+    Commit --> ReviewReq["7. Peer Review Request (naantree review request)"]
+    ReviewReq --> PeerReview["8. Independent Peer Review (naantree review result)"]
+    PeerReview --> Done["9. Mark Task Done (naantree task done)"]
+    Done --> MoreTasks{"More Tasks?"}
+    MoreTasks -- Yes --> Ready
+    MoreTasks -- No --> Gate["10. Run Quality Gate (naantree gate run)"]
+    Gate --> Finish["11. Finish Swarm (naantree finish) -> NAANTREE_COMPLETE"]
+```
+
+---
+
+## 60-Second Quickstart
+
+Two agents collaborate concurrently in the same repository on the same branch:
+
+### Terminal 1 (Agent 1)
+```bash
+# 1. Join swarm -> elected coordinator
+naantree join
+# output: id=agent-1 role=coordinator status=joined
+
+# 2. Initialize swarm objective & tasks
+naantree plan init --goal "Add user authentication service"
+naantree task add --title "User database model" --paths "src/db/**" --size S
+naantree task add --title "Auth token route" --paths "src/auth/**" --size M --deps task-1
+naantree gate set "cargo test"
+
+# 3. Claim and implement task-1
+naantree task claim task-1
+# ... agent edits src/db/model.rs ...
+naantree commit -m "feat(db): user model" --files "src/db/model.rs"
+
+# 4. Request peer review and wait
+naantree review request task-1
+naantree wait --for message
+```
+
+### Terminal 2 (Agent 2)
+```bash
+# 1. Join swarm -> assigned worker
+naantree join
+# output: id=agent-2 role=worker status=joined
+
+# 2. Check inbox for review requests
+naantree inbox --unread
+# Sees review request for task-1!
+naantree review result task-1 --verdict approve --notes "Schema is clean and tested"
+
+# 3. Pick up newly unblocked task-2 (deps satisfied)
+naantree task claim task-2
+# ... agent edits src/auth/route.rs ...
+naantree commit -m "feat(auth): token handler" --files "src/auth/route.rs"
+naantree review request task-2
+```
+
+---
+
+## Machine-Readable JSON Output
+
+Every CLI command supports the global `--json` flag, giving structured outputs tailored for LLM agents:
+
+```bash
+naantree --json whoami
+naantree --json status
+naantree --json task list --ready
+naantree --json inbox --unread
+```
+
+Example JSON output (`naantree --json whoami`):
+```json
+{
+  "id": "agent-1",
+  "role": "coordinator",
+  "status": "joined",
+  "pid": 48210
+}
+```
+
+Exit codes:
+- `0`: Success / valid state
+- `1`: Validation error, claim collision, or unmet invariant
+
+---
+
 ## Command Reference
 
 | Command | Description |
@@ -100,3 +196,12 @@ cargo build --release
 # Run full test suite (unit tests, 10-process concurrency test, 4-agent dry run)
 cargo test
 ```
+
+---
+
+## Limitations & Operating Guarantees
+
+- **Uncoordinated Commits**: Commits created directly with `git commit` outside `naantree commit` bypass path claims unless the pre-commit hook is installed (`naantree hooks install`). Running with `NAANTREE_STRICT=1` enforces that only commits originating through the `naantree` CLI are permitted.
+- **Filesystem Semantics**: Naantree relies on POSIX directory creation and rename atomicity (`mkdir` and `rename`) to manage lock directories. On standard local disks (ext4, XFS, APFS, NTFS), this provides strict mutual exclusion. On distributed or networked filesystems (NFS, SMB, CIFS), client attribute caching may impact lock latency or stale lock detection.
+- **Single-Branch Model & Remote Push**: Swarm agents collaborate on a single local branch. Remote synchronization (`git push`) is restricted to the coordinator (`naantree push`) once all tasks are complete and verified to prevent push race conditions.
+- **Process Liveness**: Agent heartbeat checks inspect process tables (`/proc` on Linux, Win32 APIs on Windows, `kill -0` on macOS). Inside containers or environments with isolated PID namespaces, agents maintain liveness via active heartbeats (`naantree heartbeat`).

@@ -190,7 +190,10 @@ pub fn run_task_accept(ctx: &Context, task_id: String) -> Result<CommandOutput, 
             .ok_or_else(|| format!("Task {} not found", task_id))?;
 
         if task.state != "proposed" {
-            return Err(format!("Task {} is in state '{}', not proposed", task_id, task.state));
+            return Err(format!(
+                "Task {} is in state '{}', not proposed",
+                task_id, task.state
+            ));
         }
 
         task.state = "todo".to_string();
@@ -315,14 +318,20 @@ pub fn run_task_claim(ctx: &Context, task_id_opt: Option<String>) -> Result<Comm
                     .find(|t| t.id == id)
                     .ok_or_else(|| format!("Task {} not found", id))?;
                 if t.state != "todo" {
-                    return Err(format!("Task {} is not in todo state (currently '{}')", id, t.state));
+                    return Err(format!(
+                        "Task {} is not in todo state (currently '{}')",
+                        id, t.state
+                    ));
                 }
                 let all_deps_done = t.deps.iter().all(|d| done_set.contains(d));
                 if !all_deps_done {
                     return Err(format!("Task {} has unfinished dependencies", id));
                 }
                 if t.kind.as_deref() != Some("env") && has_unfinished_env {
-                    return Err(format!("Task {} is gated by unfinished env tasks. Complete env tasks first.", id));
+                    return Err(format!(
+                        "Task {} is gated by unfinished env tasks. Complete env tasks first.",
+                        id
+                    ));
                 }
                 id
             }
@@ -387,7 +396,8 @@ pub fn run_task_claim(ctx: &Context, task_id_opt: Option<String>) -> Result<Comm
 
         // Add claim for paths
         if !task_paths.is_empty() {
-            let existing_claim_ids: Vec<String> = claims_data.claims.iter().map(|c| c.id.clone()).collect();
+            let existing_claim_ids: Vec<String> =
+                claims_data.claims.iter().map(|c| c.id.clone()).collect();
             let claim_id = next_claim_id(&existing_claim_ids);
             let ttl_ms = 20 * 60 * 1000; // 20m default TTL
             claims_data.claims.push(Claim {
@@ -405,7 +415,11 @@ pub fn run_task_claim(ctx: &Context, task_id_opt: Option<String>) -> Result<Comm
         }
 
         // Update task state
-        let task = tasks_data.tasks.iter_mut().find(|t| t.id == chosen_id).unwrap();
+        let task = tasks_data
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == chosen_id)
+            .unwrap();
         task.state = "doing".to_string();
         task.assignee = Some(agent_id.clone());
         task.updated_at = now;
@@ -527,7 +541,9 @@ pub fn run_task_done(
 
         // Auto-release claims associated with this task
         let mut claims_data = ctx.store.load_claims();
-        claims_data.claims.retain(|c| c.task_id.as_deref() != Some(&task_id));
+        claims_data
+            .claims
+            .retain(|c| c.task_id.as_deref() != Some(&task_id));
         ctx.store.save_claims(&claims_data)?;
 
         let _ = ctx.store.log_event(
@@ -576,7 +592,9 @@ pub fn run_task_block(
 
         // Release task's claims so paths are not locked
         let mut claims_data = ctx.store.load_claims();
-        claims_data.claims.retain(|c| c.task_id.as_deref() != Some(&task_id));
+        claims_data
+            .claims
+            .retain(|c| c.task_id.as_deref() != Some(&task_id));
         ctx.store.save_claims(&claims_data)?;
 
         let _ = ctx.store.log_event(
@@ -589,7 +607,10 @@ pub fn run_task_block(
         );
 
         Ok(CommandOutput::new()
-            .line(format!("id={} state=blocked reason=\"{}\"", task_id, reason))
+            .line(format!(
+                "id={} state=blocked reason=\"{}\"",
+                task_id, reason
+            ))
             .json(&serde_json::json!({
                 "id": task_id,
                 "state": "blocked",

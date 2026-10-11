@@ -1,5 +1,7 @@
 pub fn extract_id_num(id: &str) -> Option<u64> {
-    id.split('-').next_back().and_then(|s| s.parse::<u64>().ok())
+    id.split('-')
+        .next_back()
+        .and_then(|s| s.parse::<u64>().ok())
 }
 
 pub fn next_id_with_prefix(prefix: &str, existing: &[String]) -> String {

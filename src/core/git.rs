@@ -3,7 +3,11 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-pub fn run_git_cmd(repo_root: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String, String> {
+pub fn run_git_cmd(
+    repo_root: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.current_dir(repo_root);
     cmd.args(args);
@@ -96,11 +100,7 @@ pub fn git_commit(repo_root: &Path, message: &str) -> Result<String, String> {
     )?;
 
     if has_remote(repo_root) {
-        let _ = run_git_cmd(
-            repo_root,
-            &["pull", "--rebase", "--autostash"],
-            &[],
-        );
+        let _ = run_git_cmd(repo_root, &["pull", "--rebase", "--autostash"], &[]);
     }
 
     get_short_head(repo_root)

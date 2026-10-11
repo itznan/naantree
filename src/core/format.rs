@@ -56,7 +56,12 @@ impl CommandOutput {
                     let mut map = serde_json::Map::new();
                     map.insert(
                         "output".to_string(),
-                        Value::Array(self.lines.iter().map(|s| Value::String(s.clone())).collect()),
+                        Value::Array(
+                            self.lines
+                                .iter()
+                                .map(|s| Value::String(s.clone()))
+                                .collect(),
+                        ),
                     );
                     map
                 }

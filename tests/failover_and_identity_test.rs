@@ -17,13 +17,20 @@ fn run_cmd(dir: &Path, bin: &str, args: &[&str]) -> (i32, String, String) {
     (code, stdout, stderr)
 }
 
-fn run_cmd_env(dir: &Path, bin: &str, args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
+fn run_cmd_env(
+    dir: &Path,
+    bin: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> (i32, String, String) {
     let mut cmd = Command::new(bin);
     cmd.current_dir(dir).args(args);
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let out = cmd.output().unwrap_or_else(|e| panic!("Failed to run {} {:?}: {}", bin, args, e));
+    let out = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("Failed to run {} {:?}: {}", bin, args, e));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     let code = out.status.code().unwrap_or(-1);
@@ -35,12 +42,19 @@ fn create_temp_repo(prefix: &str) -> (PathBuf, String) {
         "naantree_{}_{}_{}",
         prefix,
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     fs::create_dir_all(&temp_dir).unwrap();
     run_cmd(&temp_dir, "git", &["init", "-b", "main"]);
     run_cmd(&temp_dir, "git", &["config", "user.name", "Tester"]);
-    run_cmd(&temp_dir, "git", &["config", "user.email", "tester@example.com"]);
+    run_cmd(
+        &temp_dir,
+        "git",
+        &["config", "user.email", "tester@example.com"],
+    );
     fs::write(temp_dir.join("init.txt"), "init\n").unwrap();
     run_cmd(&temp_dir, "git", &["add", "init.txt"]);
     run_cmd(&temp_dir, "git", &["commit", "-m", "init"]);
@@ -61,9 +75,7 @@ fn test_parallel_joins_single_coordinator() {
     for _ in 0..n {
         let dir = Arc::clone(&temp_dir);
         let b = Arc::clone(&bin);
-        handles.push(thread::spawn(move || {
-            run_cmd(&dir, &b, &["join"])
-        }));
+        handles.push(thread::spawn(move || run_cmd(&dir, &b, &["join"])));
     }
 
     let mut outputs = Vec::new();
@@ -122,14 +134,26 @@ fn test_preseeded_stale_coordinator_new_join_takes_over() {
             }
         ]
     });
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&stale_agents).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&stale_agents).unwrap(),
+    )
+    .unwrap();
 
     // New join runs
     let (code, stdout, stderr) = run_cmd(&temp_dir, &bin, &["join"]);
     assert_eq!(code, 0, "Join failed: stdout={}, stderr={}", stdout, stderr);
 
-    assert!(stdout.contains("role=coordinator"), "New joiner must become coordinator: {}", stdout);
-    assert!(stdout.contains("coordinator_alive=true"), "Coordinator alive must be true: {}", stdout);
+    assert!(
+        stdout.contains("role=coordinator"),
+        "New joiner must become coordinator: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("coordinator_alive=true"),
+        "Coordinator alive must be true: {}",
+        stdout
+    );
 
     // Verify agents.json
     let content = fs::read_to_string(state_dir.join("agents.json")).unwrap();
@@ -165,29 +189,50 @@ fn test_resume_validation() {
 
     // 2. Resuming alive agent-1 with --force succeeds
     let (code, out, _) = run_cmd(&temp_dir, &bin, &["join", "--resume", "agent-1", "--force"]);
-    assert_eq!(code, 0, "Resuming alive agent with --force must succeed: {}", out);
+    assert_eq!(
+        code, 0,
+        "Resuming alive agent with --force must succeed: {}",
+        out
+    );
     assert!(out.contains("status=resumed"));
 
     // 3. Demote superseded coordinator on resume:
     // Make agent-1 stale, promote agent-2 to coordinator
     let state_dir = temp_dir.join(".naantree").join("state");
-    let mut data: serde_json::Value = serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
+    let mut data: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
     data["agents"][0]["is_stale"] = serde_json::json!(true);
     data["agents"][0]["role"] = serde_json::json!("coordinator");
     data["agents"][1]["is_stale"] = serde_json::json!(false);
     data["agents"][1]["role"] = serde_json::json!("coordinator");
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&data).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&data).unwrap(),
+    )
+    .unwrap();
 
     // Now resume agent-1
     let (code, out, _) = run_cmd(&temp_dir, &bin, &["join", "--resume", "agent-1"]);
     assert_eq!(code, 0, "Resume must succeed: {}", out);
-    assert!(out.contains("role=worker"), "Superseded coordinator must be demoted to worker: {}", out);
+    assert!(
+        out.contains("role=worker"),
+        "Superseded coordinator must be demoted to worker: {}",
+        out
+    );
 
     // Verify agents.json: exactly one coordinator
-    let updated: serde_json::Value = serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
+    let updated: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
     let agents = updated["agents"].as_array().unwrap();
-    let coordinators: Vec<&serde_json::Value> = agents.iter().filter(|a| a["role"] == "coordinator" && a["is_stale"] == false).collect();
-    assert_eq!(coordinators.len(), 1, "Must never have two live coordinators");
+    let coordinators: Vec<&serde_json::Value> = agents
+        .iter()
+        .filter(|a| a["role"] == "coordinator" && a["is_stale"] == false)
+        .collect();
+    assert_eq!(
+        coordinators.len(),
+        1,
+        "Must never have two live coordinators"
+    );
     assert_eq!(coordinators[0]["id"], "agent-2");
 }
 
@@ -205,16 +250,32 @@ fn test_coordinator_stale_failover_on_worker_command() {
 
     // Age agent-1 heartbeat by 200 seconds
     let state_dir = temp_dir.join(".naantree").join("state");
-    let mut data: serde_json::Value = serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
-    let old_time = data["agents"][0]["last_heartbeat"].as_u64().unwrap().saturating_sub(200_000);
+    let mut data: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
+    let old_time = data["agents"][0]["last_heartbeat"]
+        .as_u64()
+        .unwrap()
+        .saturating_sub(200_000);
     data["agents"][0]["last_heartbeat"] = serde_json::json!(old_time);
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&data).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&data).unwrap(),
+    )
+    .unwrap();
 
     // Worker agent-2 runs status
     let (code, out, err) = run_cmd(&temp_dir, &bin, &["--as", "agent-2", "status"]);
     assert_eq!(code, 0, "Status failed: {}\n{}", out, err);
-    assert!(out.contains("coordinator=agent-2"), "Agent-2 must be promoted to coordinator: {}", out);
-    assert!(out.contains("coordinator_state=alive"), "Coordinator state must be alive: {}", out);
+    assert!(
+        out.contains("coordinator=agent-2"),
+        "Agent-2 must be promoted to coordinator: {}",
+        out
+    );
+    assert!(
+        out.contains("coordinator_state=alive"),
+        "Coordinator state must be alive: {}",
+        out
+    );
 
     // Check log events: coordinator_promoted
     let (code, log_out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-2", "log"]);
@@ -232,24 +293,50 @@ fn test_identity_resolution_session_file() {
     assert!(out.contains("agent=agent-1"));
 
     // Subshell with NAANTREE_SESSION
-    let (code, who_out, _) = run_cmd_env(&temp_dir, &bin, &["whoami"], &[("NAANTREE_SESSION", "sess-alpha")]);
+    let (code, who_out, _) = run_cmd_env(
+        &temp_dir,
+        &bin,
+        &["whoami"],
+        &[("NAANTREE_SESSION", "sess-alpha")],
+    );
     assert_eq!(code, 0);
-    assert!(who_out.contains("id=agent-1"), "Resolved via NAANTREE_SESSION: {}", who_out);
+    assert!(
+        who_out.contains("id=agent-1"),
+        "Resolved via NAANTREE_SESSION: {}",
+        who_out
+    );
 
     // Command with --session
     let (code, who_out2, _) = run_cmd(&temp_dir, &bin, &["--session", "sess-alpha", "whoami"]);
     assert_eq!(code, 0);
-    assert!(who_out2.contains("id=agent-1"), "Resolved via --session: {}", who_out2);
+    assert!(
+        who_out2.contains("id=agent-1"),
+        "Resolved via --session: {}",
+        who_out2
+    );
 
     // Subshell with NAANTREE_AGENT
-    let (code, who_out3, _) = run_cmd_env(&temp_dir, &bin, &["whoami"], &[("NAANTREE_AGENT", "agent-1")]);
+    let (code, who_out3, _) = run_cmd_env(
+        &temp_dir,
+        &bin,
+        &["whoami"],
+        &[("NAANTREE_AGENT", "agent-1")],
+    );
     assert_eq!(code, 0);
-    assert!(who_out3.contains("id=agent-1"), "Resolved via NAANTREE_AGENT: {}", who_out3);
+    assert!(
+        who_out3.contains("id=agent-1"),
+        "Resolved via NAANTREE_AGENT: {}",
+        who_out3
+    );
 
     // Subshell with --as
     let (code, who_out4, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "whoami"]);
     assert_eq!(code, 0);
-    assert!(who_out4.contains("id=agent-1"), "Resolved via --as: {}", who_out4);
+    assert!(
+        who_out4.contains("id=agent-1"),
+        "Resolved via --as: {}",
+        who_out4
+    );
 }
 
 #[test]
@@ -290,7 +377,11 @@ fn test_doctor_invariant_violations() {
             }
         ]
     });
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&double_coord).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&double_coord).unwrap(),
+    )
+    .unwrap();
 
     let (code, out, err) = run_cmd(&temp_dir, &bin, &["doctor"]);
     assert_ne!(code, 0, "Multiple coordinators must fail doctor");
@@ -313,7 +404,11 @@ fn test_doctor_invariant_violations() {
             }
         ]
     });
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&no_coord).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&no_coord).unwrap(),
+    )
+    .unwrap();
 
     let (code, out, err) = run_cmd(&temp_dir, &bin, &["doctor"]);
     assert_ne!(code, 0, "No live coordinator must fail doctor");
@@ -347,7 +442,11 @@ fn test_doctor_invariant_violations() {
             }
         ]
     });
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&ghost).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&ghost).unwrap(),
+    )
+    .unwrap();
 
     let (code, out, err) = run_cmd(&temp_dir, &bin, &["doctor"]);
     assert_ne!(code, 0, "Ghost agent must fail doctor");
@@ -370,12 +469,18 @@ fn test_doctor_invariant_violations() {
             }
         ]
     });
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&dead_pid).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&dead_pid).unwrap(),
+    )
+    .unwrap();
 
     let (code, out, err) = run_cmd(&temp_dir, &bin, &["doctor"]);
     assert_ne!(code, 0, "Dead recorded PID must fail doctor");
     let combined = format!("{}{}", out, err);
-    assert!(combined.contains("recorded PID 999999999 is dead") && combined.contains("doctor=FAIL"));
+    assert!(
+        combined.contains("recorded PID 999999999 is dead") && combined.contains("doctor=FAIL")
+    );
 
     // Case E: Claims owned by stale agents
     let alive_agent_and_stale_claim = serde_json::json!({
@@ -419,8 +524,16 @@ fn test_doctor_invariant_violations() {
             }
         ]
     });
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&alive_agent_and_stale_claim).unwrap()).unwrap();
-    fs::write(state_dir.join("claims.json"), serde_json::to_string_pretty(&claims).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&alive_agent_and_stale_claim).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        state_dir.join("claims.json"),
+        serde_json::to_string_pretty(&claims).unwrap(),
+    )
+    .unwrap();
 
     let (code, out, err) = run_cmd(&temp_dir, &bin, &["doctor"]);
     assert_ne!(code, 0, "Claims owned by stale agent must fail doctor");
@@ -441,24 +554,52 @@ fn test_coordinator_claim_and_wait() {
     assert_eq!(code, 0);
 
     // Agent-2 tries to claim coordinator role while Agent-1 is alive -> fails
-    let (code, _, err) = run_cmd(&temp_dir, &bin, &["--as", "agent-2", "coordinator", "claim"]);
+    let (code, _, err) = run_cmd(
+        &temp_dir,
+        &bin,
+        &["--as", "agent-2", "coordinator", "claim"],
+    );
     assert_ne!(code, 0);
     assert!(err.contains("active coordinator 'agent-1' is still alive"));
 
     // Make Agent-1 stale
     let state_dir = temp_dir.join(".naantree").join("state");
-    let mut data: serde_json::Value = serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
-    let old_time = data["agents"][0]["last_heartbeat"].as_u64().unwrap().saturating_sub(200_000);
+    let mut data: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
+    let old_time = data["agents"][0]["last_heartbeat"]
+        .as_u64()
+        .unwrap()
+        .saturating_sub(200_000);
     data["agents"][0]["last_heartbeat"] = serde_json::json!(old_time);
-    fs::write(state_dir.join("agents.json"), serde_json::to_string_pretty(&data).unwrap()).unwrap();
+    fs::write(
+        state_dir.join("agents.json"),
+        serde_json::to_string_pretty(&data).unwrap(),
+    )
+    .unwrap();
 
     // Now Agent-2 claims coordinator role -> succeeds
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-2", "coordinator", "claim"]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &["--as", "agent-2", "coordinator", "claim"],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("role=coordinator coordinator_alive=true status=claimed"));
 
     // Test wait --for coordinator returns immediately since coordinator is alive
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-2", "wait", "--for", "coordinator", "--timeout", "5"]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &[
+            "--as",
+            "agent-2",
+            "wait",
+            "--for",
+            "coordinator",
+            "--timeout",
+            "5",
+        ],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("event=coordinator id=agent-2"));
 }
@@ -472,42 +613,91 @@ fn test_gate_set_baseline_and_env_task_gating() {
     assert_eq!(code, 0);
 
     // Gate set with passing command
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "gate", "set", "echo 'all good'"]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &["--as", "agent-1", "gate", "set", "echo 'all good'"],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("gate_baseline=PASS"));
 
     // Add env task
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &[
-        "--as", "agent-1", "task", "add",
-        "--title", "Setup Environment",
-        "--kind", "env",
-        "--paths", "env/**",
-        "--size", "S"
-    ]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &[
+            "--as",
+            "agent-1",
+            "task",
+            "add",
+            "--title",
+            "Setup Environment",
+            "--kind",
+            "env",
+            "--paths",
+            "env/**",
+            "--size",
+            "S",
+        ],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("kind=env"));
 
     // Add code task with overlapping path -> should warn
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &[
-        "--as", "agent-1", "task", "add",
-        "--title", "Install Tooling",
-        "--paths", "env/tool.sh",
-        "--size", "S"
-    ]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &[
+            "--as",
+            "agent-1",
+            "task",
+            "add",
+            "--title",
+            "Install Tooling",
+            "--paths",
+            "env/tool.sh",
+            "--size",
+            "S",
+        ],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("[WARN]") && out.contains("overlaps with existing task task-1"));
 
     // Check ready tasks: only task-1 (env) should be ready, task-2 is gated by unfinished env task!
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "task", "list", "--ready"]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &["--as", "agent-1", "task", "list", "--ready"],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("id=task-1") && !out.contains("id=task-2"));
 
     // Complete task-1
-    run_cmd(&temp_dir, &bin, &["--as", "agent-1", "task", "claim", "task-1"]);
-    run_cmd(&temp_dir, &bin, &["--as", "agent-1", "task", "done", "task-1", "--summary", "Env ready"]);
+    run_cmd(
+        &temp_dir,
+        &bin,
+        &["--as", "agent-1", "task", "claim", "task-1"],
+    );
+    run_cmd(
+        &temp_dir,
+        &bin,
+        &[
+            "--as",
+            "agent-1",
+            "task",
+            "done",
+            "task-1",
+            "--summary",
+            "Env ready",
+        ],
+    );
 
     // Now task-2 should be ready
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "task", "list", "--ready"]);
+    let (code, out, _) = run_cmd(
+        &temp_dir,
+        &bin,
+        &["--as", "agent-1", "task", "list", "--ready"],
+    );
     assert_eq!(code, 0);
     assert!(out.contains("id=task-2"));
 }

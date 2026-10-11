@@ -1,11 +1,11 @@
-use std::thread;
-use std::time::Duration;
 use crate::core::context::Context;
 use crate::core::format::CommandOutput;
 use crate::core::ids::next_claim_id;
 use crate::core::lock::{current_time_ms, with_lock};
 use crate::core::paths::{normalize_path, paths_overlap};
 use crate::core::store::Claim;
+use std::thread;
+use std::time::Duration;
 
 pub fn parse_ttl_ms(ttl: Option<String>) -> u64 {
     if let Some(s) = ttl {
@@ -76,7 +76,10 @@ pub fn run_claim(
                             ctx.store.save_claims(&claims_data)?;
                             return Ok((
                                 true,
-                                format!("claim={} agent={} path={} status=renewed", claim_id, agent_id, target_path),
+                                format!(
+                                    "claim={} agent={} path={} status=renewed",
+                                    claim_id, agent_id, target_path
+                                ),
                                 claim_id,
                             ));
                         }
@@ -86,9 +89,14 @@ pub fn run_claim(
                             ctx.store.save_claims(&claims_data)?;
                         }
                         let owner = claims_data.claims[idx].agent_id.clone();
-                        let expires_in = (claims_data.claims[idx].expires_at.saturating_sub(now)) / 1000;
+                        let expires_in =
+                            (claims_data.claims[idx].expires_at.saturating_sub(now)) / 1000;
                         if wait {
-                            Ok((false, format!("waiting for owner {}", owner), "".to_string()))
+                            Ok((
+                                false,
+                                format!("waiting for owner {}", owner),
+                                "".to_string(),
+                            ))
                         } else {
                             Err(format!(
                                 "Path '{}' is currently held by {} (expires in {}s). Added to waiting queue.",
@@ -98,7 +106,8 @@ pub fn run_claim(
                     }
                     None => {
                         // Create shared claim
-                        let existing_ids: Vec<String> = claims_data.claims.iter().map(|c| c.id.clone()).collect();
+                        let existing_ids: Vec<String> =
+                            claims_data.claims.iter().map(|c| c.id.clone()).collect();
                         let claim_id = next_claim_id(&existing_ids);
                         claims_data.claims.push(Claim {
                             id: claim_id.clone(),
@@ -114,7 +123,10 @@ pub fn run_claim(
                         ctx.store.save_claims(&claims_data)?;
                         Ok((
                             true,
-                            format!("claim={} agent={} path={} shared=true", claim_id, agent_id, target_path),
+                            format!(
+                                "claim={} agent={} path={} shared=true",
+                                claim_id, agent_id, target_path
+                            ),
                             claim_id,
                         ))
                     }
@@ -138,7 +150,8 @@ pub fn run_claim(
                 }
 
                 // Granted!
-                let existing_ids: Vec<String> = claims_data.claims.iter().map(|c| c.id.clone()).collect();
+                let existing_ids: Vec<String> =
+                    claims_data.claims.iter().map(|c| c.id.clone()).collect();
                 let claim_id = next_claim_id(&existing_ids);
                 claims_data.claims.push(Claim {
                     id: claim_id.clone(),
@@ -181,7 +194,10 @@ pub fn run_claim(
             }
             Ok((false, _, _)) => {
                 if current_time_ms() - start_wait > max_wait_ms {
-                    return Err(format!("Timed out after {}s waiting for claim", max_wait_ms / 1000));
+                    return Err(format!(
+                        "Timed out after {}s waiting for claim",
+                        max_wait_ms / 1000
+                    ));
                 }
                 thread::sleep(Duration::from_millis(500));
             }
@@ -190,11 +206,7 @@ pub fn run_claim(
     }
 }
 
-pub fn run_release(
-    ctx: &Context,
-    paths: Vec<String>,
-    all: bool,
-) -> Result<CommandOutput, String> {
+pub fn run_release(ctx: &Context, paths: Vec<String>, all: bool) -> Result<CommandOutput, String> {
     let agent_id = ctx.require_agent()?;
     with_lock(&ctx.state_dir, &agent_id, || {
         let mut claims_data = ctx.store.load_claims();

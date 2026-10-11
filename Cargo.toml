@@ -2,6 +2,14 @@
 name = "naantree"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Modular multi-agent coordination protocol and CLI for autonomous coding swarms"
+repository = "https://github.com/itznan/naantree"
+homepage = "https://github.com/itznan/naantree"
+readme = "README.md"
+keywords = ["multi-agent", "swarm", "ai-agents", "coordination", "git"]
+categories = ["command-line-utilities", "development-tools"]
+
 
 [lib]
 name = "naantree"
@@ -17,3 +25,11 @@ glob = "0.3.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
 uuid = { version = "1.28.0", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+

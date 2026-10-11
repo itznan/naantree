@@ -21,7 +21,10 @@ fn test_simulated_4_agent_dry_run() {
     let temp_dir = std::env::temp_dir().join(format!(
         "naantree_dryrun_{}_{}",
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
     ));
 
     fs::create_dir_all(&temp_dir).unwrap();
@@ -31,7 +34,11 @@ fn test_simulated_4_agent_dry_run() {
     let (code, _, _) = run_nt(&temp_dir, "git", &["init", "-b", "main"]);
     assert_eq!(code, 0);
     run_nt(&temp_dir, "git", &["config", "user.name", "Tester"]);
-    run_nt(&temp_dir, "git", &["config", "user.email", "tester@example.com"]);
+    run_nt(
+        &temp_dir,
+        "git",
+        &["config", "user.email", "tester@example.com"],
+    );
     fs::write(temp_dir.join("init.txt"), "init").unwrap();
     run_nt(&temp_dir, "git", &["add", "init.txt"]);
     run_nt(&temp_dir, "git", &["commit", "-m", "init"]);
@@ -51,7 +58,14 @@ fn test_simulated_4_agent_dry_run() {
     let (code, _, _) = run_nt(
         &temp_dir,
         nt,
-        &["--as", "agent-1", "plan", "init", "--goal", "Build Greetings Suite"],
+        &[
+            "--as",
+            "agent-1",
+            "plan",
+            "init",
+            "--goal",
+            "Build Greetings Suite",
+        ],
     );
     assert_eq!(code, 0);
 
@@ -68,16 +82,7 @@ fn test_simulated_4_agent_dry_run() {
             &temp_dir,
             nt,
             &[
-                "--as",
-                "agent-1",
-                "task",
-                "add",
-                "--title",
-                title,
-                "--paths",
-                path,
-                "--size",
-                "S",
+                "--as", "agent-1", "task", "add", "--title", title, "--paths", path, "--size", "S",
             ],
         );
         assert_eq!(code, 0);
@@ -137,7 +142,11 @@ fn test_simulated_4_agent_dry_run() {
     for (agent_id, task_id, file_path, content) in &agent_tasks {
         // Claim task
         let (code, out, err) = run_nt(&temp_dir, nt, &["--as", agent_id, "task", "claim", task_id]);
-        assert_eq!(code, 0, "Claim {} by {} failed: {}\n{}", task_id, agent_id, out, err);
+        assert_eq!(
+            code, 0,
+            "Claim {} by {} failed: {}\n{}",
+            task_id, agent_id, out, err
+        );
 
         // Edit file
         fs::write(temp_dir.join(file_path), content).unwrap();
@@ -152,7 +161,11 @@ fn test_simulated_4_agent_dry_run() {
         assert_eq!(code, 0, "Commit by {} failed: {}\n{}", agent_id, out, err);
 
         // Request review
-        let (code, _, _) = run_nt(&temp_dir, nt, &["--as", agent_id, "review", "request", task_id]);
+        let (code, _, _) = run_nt(
+            &temp_dir,
+            nt,
+            &["--as", agent_id, "review", "request", task_id],
+        );
         assert_eq!(code, 0);
     }
 
@@ -162,7 +175,15 @@ fn test_simulated_4_agent_dry_run() {
         &temp_dir,
         nt,
         &[
-            "--as", "agent-2", "review", "result", "task-1", "--verdict", "approve", "--notes", "LGTM",
+            "--as",
+            "agent-2",
+            "review",
+            "result",
+            "task-1",
+            "--verdict",
+            "approve",
+            "--notes",
+            "LGTM",
         ],
     );
     assert_eq!(code, 0);
@@ -172,7 +193,15 @@ fn test_simulated_4_agent_dry_run() {
         &temp_dir,
         nt,
         &[
-            "--as", "agent-1", "review", "result", "task-2", "--verdict", "approve", "--notes", "LGTM",
+            "--as",
+            "agent-1",
+            "review",
+            "result",
+            "task-2",
+            "--verdict",
+            "approve",
+            "--notes",
+            "LGTM",
         ],
     );
     assert_eq!(code, 0);
@@ -182,7 +211,15 @@ fn test_simulated_4_agent_dry_run() {
         &temp_dir,
         nt,
         &[
-            "--as", "agent-4", "review", "result", "task-3", "--verdict", "approve", "--notes", "LGTM",
+            "--as",
+            "agent-4",
+            "review",
+            "result",
+            "task-3",
+            "--verdict",
+            "approve",
+            "--notes",
+            "LGTM",
         ],
     );
     assert_eq!(code, 0);
@@ -192,7 +229,15 @@ fn test_simulated_4_agent_dry_run() {
         &temp_dir,
         nt,
         &[
-            "--as", "agent-3", "review", "result", "task-4", "--verdict", "approve", "--notes", "LGTM",
+            "--as",
+            "agent-3",
+            "review",
+            "result",
+            "task-4",
+            "--verdict",
+            "approve",
+            "--notes",
+            "LGTM",
         ],
     );
     assert_eq!(code, 0);

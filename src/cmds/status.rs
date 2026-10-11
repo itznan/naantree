@@ -1,8 +1,8 @@
-use std::collections::HashSet;
 use crate::core::context::Context;
 use crate::core::format::CommandOutput;
 use crate::core::lock::with_lock;
 use crate::core::store::Message;
+use std::collections::HashSet;
 
 pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
     with_lock(&ctx.state_dir, "status", || {
@@ -20,7 +20,11 @@ pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
 
         let (coordinator, coordinator_state) = if let Some(coord) = coordinator_agent {
             (coord.id.clone(), "alive")
-        } else if agents_data.agents.iter().any(|a| a.role == "coordinator" && a.is_stale) {
+        } else if agents_data
+            .agents
+            .iter()
+            .any(|a| a.role == "coordinator" && a.is_stale)
+        {
             ("none".to_string(), "stale")
         } else {
             ("none".to_string(), "none")
@@ -170,7 +174,12 @@ pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
             "naantree task claim"
         } else if review > 0 {
             "naantree inbox"
-        } else if is_caller_coordinator && doing == 0 && review == 0 && todo == 0 && !tasks_data.tasks.is_empty() {
+        } else if is_caller_coordinator
+            && doing == 0
+            && review == 0
+            && todo == 0
+            && !tasks_data.tasks.is_empty()
+        {
             "naantree finish"
         } else {
             "naantree wait --timeout 120"

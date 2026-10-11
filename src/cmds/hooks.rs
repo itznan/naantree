@@ -1,8 +1,8 @@
-use std::fs;
 use crate::core::context::Context;
 use crate::core::format::CommandOutput;
 use crate::core::git::get_staged_files;
 use crate::core::paths::file_matches_pattern;
+use std::fs;
 
 pub fn run_hooks_install(ctx: &Context) -> Result<CommandOutput, String> {
     let hooks_dir = ctx.repo_root.join(".git").join("hooks");
@@ -13,10 +13,16 @@ pub fn run_hooks_install(ctx: &Context) -> Result<CommandOutput, String> {
 # Naantree pre-commit collision guard
 if command -v naantree >/dev/null 2>&1; then
     naantree hooks pre-commit
+elif command -v naantree.exe >/dev/null 2>&1; then
+    naantree.exe hooks pre-commit
 elif [ -f "./target/release/naantree" ]; then
     ./target/release/naantree hooks pre-commit
+elif [ -f "./target/release/naantree.exe" ]; then
+    ./target/release/naantree.exe hooks pre-commit
 elif [ -f "./target/debug/naantree" ]; then
     ./target/debug/naantree hooks pre-commit
+elif [ -f "./target/debug/naantree.exe" ]; then
+    ./target/debug/naantree.exe hooks pre-commit
 else
     cargo run --quiet -- hooks pre-commit
 fi
@@ -47,7 +53,9 @@ pub fn run_hooks_pre_commit(ctx: &Context) -> Result<CommandOutput, String> {
     if std::env::var("NAANTREE_STRICT").as_deref() == Ok("1")
         && std::env::var("NAANTREE_INSIDE_COMMIT").as_deref() != Ok("1")
     {
-        return Err("Commits outside 'naantree commit' are forbidden when NAANTREE_STRICT=1.".to_string());
+        return Err(
+            "Commits outside 'naantree commit' are forbidden when NAANTREE_STRICT=1.".to_string(),
+        );
     }
 
     let staged = get_staged_files(&ctx.repo_root)?;

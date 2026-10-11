@@ -1,14 +1,17 @@
-use std::fs;
 use naantree::core::ids::{extract_id_num, next_agent_id, next_claim_id, next_task_id};
 use naantree::core::lock::{acquire_lock, current_time_ms};
 use naantree::core::paths::{file_matches_pattern, normalize_path, paths_overlap};
 use naantree::core::store::{Agent, Store, Task};
+use std::fs;
 
 #[test]
 fn test_ids() {
     assert_eq!(extract_id_num("agent-1"), Some(1));
     assert_eq!(extract_id_num("task-42"), Some(42));
-    assert_eq!(next_agent_id(&["agent-1".into(), "agent-2".into()]), "agent-3");
+    assert_eq!(
+        next_agent_id(&["agent-1".into(), "agent-2".into()]),
+        "agent-3"
+    );
     assert_eq!(next_task_id(&[]), "task-1");
     assert_eq!(next_claim_id(&["claim-10".into()]), "claim-11");
 }

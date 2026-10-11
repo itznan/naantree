@@ -1,13 +1,13 @@
-use std::collections::HashSet;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::thread;
-use std::time::Duration;
 use crate::core::context::Context;
 use crate::core::format::CommandOutput;
 use crate::core::ids::{next_dec_id, next_msg_id};
 use crate::core::lock::{current_time_ms, with_lock};
 use crate::core::store::{Decision, Message};
+use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::thread;
+use std::time::Duration;
 
 pub fn send_message_internal(
     ctx: &Context,
@@ -61,7 +61,8 @@ pub fn run_send(
 ) -> Result<CommandOutput, String> {
     let agent_id = ctx.require_agent()?;
     with_lock(&ctx.state_dir, &agent_id, || {
-        let msg_id = send_message_internal(ctx, &agent_id, &to, &msg_type, &ref_id, &text, needs_ack)?;
+        let msg_id =
+            send_message_internal(ctx, &agent_id, &to, &msg_type, &ref_id, &text, needs_ack)?;
 
         Ok(CommandOutput::new()
             .line(format!(
@@ -146,7 +147,9 @@ pub fn run_inbox(
             lines.push("inbox=empty (no messages)".to_string());
         }
 
-        let has_unacked = matched.iter().any(|m| m.needs_ack && !m.ack_by.contains(&agent_id));
+        let has_unacked = matched
+            .iter()
+            .any(|m| m.needs_ack && !m.ack_by.contains(&agent_id));
         let next_hint = if has_unacked {
             let unacked_id = matched
                 .iter()
@@ -190,8 +193,17 @@ pub fn run_ack(ctx: &Context, msg_id: String) -> Result<CommandOutput, String> {
 
         // Rewrite messages.jsonl
         let target = ctx.state_dir.join("messages.jsonl");
-        let tmp = ctx.state_dir.join(format!("messages.tmp.{}.{}", std::process::id(), current_time_ms()));
-        let mut file = OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).map_err(|e| e.to_string())?;
+        let tmp = ctx.state_dir.join(format!(
+            "messages.tmp.{}.{}",
+            std::process::id(),
+            current_time_ms()
+        ));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
         for m in &updated_messages {
             let mut line = serde_json::to_string(m).map_err(|e| e.to_string())?;
             line.push('\n');
@@ -272,7 +284,9 @@ pub fn run_wait(
 
             let meta = ctx.store.load_meta();
             if meta.finished {
-                return Ok(Some("event=complete reason=\"NAANTREE_COMPLETE\"".to_string()));
+                return Ok(Some(
+                    "event=complete reason=\"NAANTREE_COMPLETE\"".to_string(),
+                ));
             }
 
             // 1. Check messages
@@ -314,14 +328,11 @@ pub fn run_wait(
                     .iter()
                     .any(|task| task.kind.as_deref() == Some("env") && task.state != "done");
 
-                let ready_task = tasks_data
-                    .tasks
-                    .iter()
-                    .find(|t| {
-                        t.state == "todo"
-                            && t.deps.iter().all(|d| done_set.contains(d))
-                            && (t.kind.as_deref() == Some("env") || !has_unfinished_env)
-                    });
+                let ready_task = tasks_data.tasks.iter().find(|t| {
+                    t.state == "todo"
+                        && t.deps.iter().all(|d| done_set.contains(d))
+                        && (t.kind.as_deref() == Some("env") || !has_unfinished_env)
+                });
 
                 if let Some(t) = ready_task {
                     return Ok(Some(format!(
@@ -344,7 +355,11 @@ pub fn run_wait(
             // 4. Check unblock
             if cond == "any" || cond == "unblock" {
                 let tasks_data = ctx.store.load_tasks();
-                if let Some(t) = tasks_data.tasks.iter().find(|t| t.state == "todo" && t.note.as_deref() == Some("unblocked")) {
+                if let Some(t) = tasks_data
+                    .tasks
+                    .iter()
+                    .find(|t| t.state == "todo" && t.note.as_deref() == Some("unblocked"))
+                {
                     return Ok(Some(format!("event=unblocked id={}", t.id)));
                 }
             }
@@ -356,7 +371,10 @@ pub fn run_wait(
                     .iter()
                     .find(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none())
                 {
-                    return Ok(Some(format!("event=coordinator id={} alive=true", coord.id)));
+                    return Ok(Some(format!(
+                        "event=coordinator id={} alive=true",
+                        coord.id
+                    )));
                 }
             }
 

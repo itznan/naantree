@@ -41,7 +41,9 @@ fn main() {
         Commands::Leave => cmds::lifecycle::run_leave(&ctx),
 
         Commands::Plan { cmd } => match cmd {
-            PlanSubcommand::Init { goal, allow_push } => cmds::plan::run_plan_init(&ctx, goal, allow_push),
+            PlanSubcommand::Init { goal, allow_push } => {
+                cmds::plan::run_plan_init(&ctx, goal, allow_push)
+            }
         },
 
         Commands::Task { cmd } => match cmd {
@@ -55,12 +57,22 @@ fn main() {
                 for_agent,
                 reviewers,
                 kind,
-            } => cmds::task::run_task_add(&ctx, title, desc, tags, paths, deps, size, for_agent, reviewers, kind),
+            } => cmds::task::run_task_add(
+                &ctx, title, desc, tags, paths, deps, size, for_agent, reviewers, kind,
+            ),
             TaskSubcommand::Accept { id } => cmds::task::run_task_accept(&ctx, id),
-            TaskSubcommand::List { state, mine, ready } => cmds::task::run_task_list(&ctx, state, mine, ready),
+            TaskSubcommand::List { state, mine, ready } => {
+                cmds::task::run_task_list(&ctx, state, mine, ready)
+            }
             TaskSubcommand::Claim { id } => cmds::task::run_task_claim(&ctx, id),
-            TaskSubcommand::Update { id, state, note } => cmds::task::run_task_update(&ctx, id, state, note),
-            TaskSubcommand::Done { id, summary, commit } => cmds::task::run_task_done(&ctx, id, summary, commit),
+            TaskSubcommand::Update { id, state, note } => {
+                cmds::task::run_task_update(&ctx, id, state, note)
+            }
+            TaskSubcommand::Done {
+                id,
+                summary,
+                commit,
+            } => cmds::task::run_task_done(&ctx, id, summary, commit),
             TaskSubcommand::Block { id, reason } => cmds::task::run_task_block(&ctx, id, reason),
             TaskSubcommand::Split { id, into } => cmds::task::run_task_split(&ctx, id, into),
         },
@@ -120,7 +132,9 @@ fn main() {
         Commands::Escalate { message } => cmds::comm::run_escalate(&ctx, message),
 
         Commands::Review { cmd } => match cmd {
-            ReviewSubcommand::Request { task_id, to } => cmds::finish::run_review_request(&ctx, task_id, to),
+            ReviewSubcommand::Request { task_id, to } => {
+                cmds::finish::run_review_request(&ctx, task_id, to)
+            }
             ReviewSubcommand::Result {
                 task_id,
                 verdict,

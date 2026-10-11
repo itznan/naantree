@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const DEFAULT_STALE_LOCK_MS: u64 = 30_000;
@@ -161,11 +161,7 @@ pub fn acquire_lock(
     ))
 }
 
-pub fn with_lock<F, R>(
-    state_dir: &Path,
-    agent_id: &str,
-    f: F,
-) -> Result<R, String>
+pub fn with_lock<F, R>(state_dir: &Path, agent_id: &str, f: F) -> Result<R, String>
 where
     F: FnOnce() -> Result<R, String>,
 {
