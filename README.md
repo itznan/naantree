@@ -35,8 +35,9 @@ npx skills add -g itznan/naantree-skill
 
 1. **Self-Organizing Lifecycle**:
    - `naantree join` atomically assigns monotonic agent IDs (`agent-1`, `agent-2`...).
-   - First agent automatically assumes the `coordinator` role; subsequent agents become `workers`.
-   - Automatic dead-agent reaping: inactive agents (>5 min) are declared stale, their tasks return to `todo`, claims are released, and coordinator duties failover to the next lowest-id alive agent.
+   - Role is determined by liveness (not ID number): if no live coordinator exists, the joining agent becomes coordinator. Invariant: at most one live coordinator.
+   - Automatic dead-agent reaping: inactive agents (>90s default, configurable via `NAANTREE_STALE_TIMEOUT_MS`) are declared stale, their tasks return to `todo`, claims are released, and coordinator duties failover automatically.
+   - Identity survives fresh subshells via `--as agent-N`, `NAANTREE_AGENT`, or session files keyed by session ID, parent PID, and TTY.
 
 2. **Collision Control via Path Claims**:
    - `naantree claim <paths...>` locks files and directories (with recursive directory and glob pattern matching).
@@ -67,12 +68,13 @@ npx skills add -g itznan/naantree-skill
 
 | Command | Description |
 |---|---|
-| `naantree doctor` | Verifies environment, toolchain, git repo, locks, and git hooks |
-| `naantree join [--tags t1,t2]` | Joins swarm and obtains an agent identity |
-| `naantree whoami` | Displays caller's agent ID, role, and status |
-| `naantree status` | Overview of coordinator, agents, task board, claims, and inbox |
+| `naantree doctor` | Verifies environment, toolchain, git repo, locks, and swarm invariants |
+| `naantree join [--tags t1,t2] [--session <key>] [--resume <id> [--force]]` | Joins swarm and obtains an agent identity |
+| `naantree coordinator claim` | Claims coordinator role if current coordinator is stale |
+| `naantree whoami` | Displays caller's agent ID, role, status, and PID |
+| `naantree status` | Overview of coordinator state, heartbeat ages, task board, and claims |
 | `naantree plan init --goal "..."` | (Coordinator) Initializes the swarm's objective |
-| `naantree task add --title "..." --paths "..."` | Creates a task on the task board |
+| `naantree task add --title "..." --paths "..." [--kind env]` | Creates a task on the task board (warns on path overlap) |
 | `naantree task claim [id]` | Atomically claims a task and its paths |
 | `naantree claim <paths...> [--shared]` | Claims path(s) to avoid collisions |
 | `naantree release <paths...\|--all>` | Releases claimed paths |
@@ -82,8 +84,9 @@ npx skills add -g itznan/naantree-skill
 | `naantree task done <taskId> --summary "..."` | Marks reviewed task as complete |
 | `naantree send --to <target> --type <type> -m "..."` | Sends structured message to peer(s) |
 | `naantree inbox [--unread]` | Reads incoming messages |
-| `naantree wait [--for task\|message] [--timeout 120]` | Waits for events without token waste |
-| `naantree gate set "<cmd>"` / `gate run` | Sets and executes quality gate command |
+| `naantree wait [--for task\|message\|coordinator] [--timeout 120]` | Waits for events without token waste |
+| `naantree gate set "<cmd>"` | Sets gate command and runs baseline verification check |
+| `naantree gate run` | Executes quality gate command under lock |
 | `naantree finish` | Validates completion and outputs `NAANTREE_COMPLETE` |
 
 ---
