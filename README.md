@@ -4,6 +4,31 @@
 
 Naantree allows 2 to 20+ autonomous AI coding agents to collaborate safely in the **same repository folder** and on the **same git branch**. Agents are given an identical prompt and autonomously organize: they auto-assign identities, elect a coordinator, decompose work into collision-free tasks, communicate, conduct peer reviews, and safely finish.
 
+Official Skill Package: [github.com/itznan/naantree-skill](https://github.com/itznan/naantree-skill)
+
+---
+
+## Installation via `skills.sh`
+
+You can install the `naantree` skill directly into your AI coding agents using `npx skills`:
+
+```bash
+# Add official skill package
+npx skills add itznan/naantree-skill
+
+# Or install directly from this repository
+npx skills add itznan/naantree
+
+# Or install globally across your machine
+npx skills add -g itznan/naantree-skill
+```
+
+### Adding to Gemini & AI Coding Agents
+- **Google Gemini / Antigravity**: Drop `SKILL.md` into `.agent/skills/naantree/SKILL.md` or `.gemini/skills/naantree/SKILL.md`, or run `npx skills add itznan/naantree-skill`.
+- **Claude Code**: `.claude/skills/naantree/SKILL.md` or `~/.claude/skills/naantree/SKILL.md`.
+- **Cursor**: `.cursor/skills/naantree/SKILL.md` or `.agents/skills/naantree/SKILL.md`.
+- **GitHub Copilot**: `.github/skills/naantree/SKILL.md`.
+
 ---
 
 ## Key Features

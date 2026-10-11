@@ -1,0 +1,10 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "groupings": [
+    {
+      "title": "Multi-Agent Coordination",
+      "description": "Multi-agent coordination protocol for coding agents sharing one repo and branch",
+      "skills": ["naantree"]
+    }
+  ]
+}
