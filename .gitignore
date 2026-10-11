@@ -1,0 +1,11 @@
+# Naantree state is local to each machine / environment
+.naantree/state/
+.naantree/state/*
+node_modules/
+*.log
+
+
+# Added by cargo
+
+/target
+.naantree/naantree
