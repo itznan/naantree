@@ -114,6 +114,7 @@ fn test_dead_agent_reaping() {
             summary: None,
             created_at: now,
             updated_at: now,
+            kind: None,
         }],
     };
     store.save_tasks(&tasks).unwrap();
