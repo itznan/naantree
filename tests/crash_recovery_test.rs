@@ -189,6 +189,7 @@ fn test_simulated_crash_recovery_dead_agent_in_doing_state() {
         serde_json::to_string_pretty(&agents_data).unwrap(),
     )
     .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
 
     // Now Coordinator runs status, which triggers auto_reap
     let (code, _out, err) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "status"]);

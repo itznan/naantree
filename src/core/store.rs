@@ -201,10 +201,15 @@ impl Store {
         if !path.exists() {
             return T::default();
         }
-        match fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => T::default(),
+        for _ in 0..10 {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str(&content) {
+                    return val;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        T::default()
     }
 
     pub fn append_jsonl<T: Serialize>(&self, filename: &str, record: &T) -> Result<(), String> {
