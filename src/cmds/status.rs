@@ -12,23 +12,46 @@ pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
         let claims_data = ctx.store.load_claims();
         let meta = ctx.store.load_meta();
 
-        let coordinator = agents_data
+        let now = crate::core::lock::current_time_ms();
+        let coordinator_agent = agents_data
             .agents
             .iter()
-            .find(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none())
-            .map(|a| a.id.clone())
-            .unwrap_or_else(|| "none".to_string());
+            .find(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none());
+
+        let (coordinator, coordinator_state) = if let Some(coord) = coordinator_agent {
+            (coord.id.clone(), "alive")
+        } else if agents_data.agents.iter().any(|a| a.role == "coordinator" && a.is_stale) {
+            ("none".to_string(), "stale")
+        } else {
+            ("none".to_string(), "none")
+        };
 
         let mut alive_agents = Vec::new();
         let mut stale_agents = Vec::new();
+        let mut agents_detail = Vec::new();
         for a in &agents_data.agents {
             if a.left_at.is_some() {
                 continue;
             }
+            let age_secs = now.saturating_sub(a.last_heartbeat) / 1000;
             if a.is_stale {
-                stale_agents.push(a.id.clone());
+                stale_agents.push(format!("{}(stale, {}s)", a.id, age_secs));
+                agents_detail.push(serde_json::json!({
+                    "id": a.id,
+                    "role": a.role,
+                    "status": "stale",
+                    "heartbeat_age_secs": age_secs,
+                    "pid": a.pid
+                }));
             } else {
-                alive_agents.push(format!("{}({})", a.id, a.role));
+                alive_agents.push(format!("{}({}, {}s)", a.id, a.role, age_secs));
+                agents_detail.push(serde_json::json!({
+                    "id": a.id,
+                    "role": a.role,
+                    "status": "alive",
+                    "heartbeat_age_secs": age_secs,
+                    "pid": a.pid
+                }));
             }
         }
 
@@ -82,6 +105,7 @@ pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
 
         let mut lines = Vec::new();
         lines.push(format!("coordinator={}", coordinator));
+        lines.push(format!("coordinator_state={}", coordinator_state));
         lines.push(format!(
             "agents=alive:[{}] stale:[{}]",
             alive_agents.join(", "),
@@ -132,6 +156,8 @@ pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
 
         let next_hint = if meta.finished {
             "none (NAANTREE_COMPLETE)"
+        } else if coordinator == "none" {
+            "naantree coordinator claim"
         } else if meta.goal.is_none() {
             if is_caller_coordinator {
                 "naantree plan init --goal \"<description>\""
@@ -154,8 +180,10 @@ pub fn run_status(ctx: &Context) -> Result<CommandOutput, String> {
             .lines(lines)
             .json(&serde_json::json!({
                 "coordinator": coordinator,
+                "coordinator_state": coordinator_state,
                 "alive_agents": alive_agents,
                 "stale_agents": stale_agents,
+                "agents_detail": agents_detail,
                 "tasks": {
                     "total": tasks_data.tasks.len(),
                     "todo": todo,

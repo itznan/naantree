@@ -5,6 +5,7 @@ use crate::core::lock::{current_time_ms, with_lock};
 use crate::core::paths::{normalize_path, paths_overlap};
 use crate::core::store::{Claim, Task};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_task_add(
     ctx: &Context,
     title: String,
@@ -15,6 +16,7 @@ pub fn run_task_add(
     size: Option<String>,
     for_agent: Option<String>,
     reviewers: Option<usize>,
+    kind: Option<String>,
 ) -> Result<CommandOutput, String> {
     let agent_id = ctx.require_agent()?;
     with_lock(&ctx.state_dir, &agent_id, || {
@@ -44,17 +46,23 @@ pub fn run_task_add(
             "proposed".to_string()
         };
 
-        let tag_list: Vec<String> = tags
+        let mut tag_list: Vec<String> = tags
             .unwrap_or_default()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
+        if let Some(k) = &kind {
+            if !tag_list.contains(k) {
+                tag_list.push(k.clone());
+            }
+        }
+
         let path_list: Vec<String> = paths
             .unwrap_or_default()
             .split(',')
-            .map(|s| normalize_path(s))
+            .map(normalize_path)
             .filter(|s| !s.is_empty())
             .collect();
 
@@ -64,6 +72,21 @@ pub fn run_task_add(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+
+        // Check path overlaps with existing tasks
+        let mut warnings = Vec::new();
+        for new_p in &path_list {
+            for existing in &tasks_data.tasks {
+                for exist_p in &existing.paths {
+                    if paths_overlap(new_p, exist_p) {
+                        warnings.push(format!(
+                            "path '{}' overlaps with existing task {} ('{}' path '{}')",
+                            new_p, existing.id, existing.title, exist_p
+                        ));
+                    }
+                }
+            }
+        }
 
         let task_size = size.unwrap_or_else(|| "M".to_string());
         let now = current_time_ms();
@@ -84,13 +107,14 @@ pub fn run_task_add(
                 Some(agent_id.clone())
             },
             commit_hash: None,
-            reviewers: reviewers.unwrap_or(1),
+            reviewers: reviewers.unwrap_or(if kind.as_deref() == Some("env") { 0 } else { 1 }),
             reviews: Vec::new(),
             note: None,
             blocked_reason: None,
             summary: None,
             created_at: now,
             updated_at: now,
+            kind: kind.clone(),
         };
 
         tasks_data.tasks.push(task);
@@ -103,7 +127,8 @@ pub fn run_task_add(
                 "id": task_id,
                 "title": title,
                 "state": state,
-                "paths": path_list
+                "paths": path_list,
+                "kind": kind
             }),
         );
 
@@ -113,23 +138,31 @@ pub fn run_task_add(
             "naantree task claim"
         };
 
-        Ok(CommandOutput::new()
-            .line(format!(
-                "id={} title=\"{}\" state={} size={} paths=\"{}\" deps=\"{}\"",
-                task_id,
-                title,
-                state,
-                task_size,
-                path_list.join(","),
-                dep_list.join(",")
-            ))
+        let mut out = CommandOutput::new();
+        for w in &warnings {
+            out = out.line(format!("[WARN] {}", w));
+        }
+        out = out.line(format!(
+            "id={} title=\"{}\" state={} size={} kind={} paths=\"{}\" deps=\"{}\"",
+            task_id,
+            title,
+            state,
+            task_size,
+            kind.as_deref().unwrap_or("standard"),
+            path_list.join(","),
+            dep_list.join(",")
+        ));
+
+        Ok(out
             .json(&serde_json::json!({
                 "id": task_id,
                 "title": title,
                 "state": state,
                 "size": task_size,
+                "kind": kind,
                 "paths": path_list,
-                "deps": dep_list
+                "deps": dep_list,
+                "warnings": warnings
             }))
             .next(next_hint))
     })
@@ -194,6 +227,11 @@ pub fn run_task_list(
         .map(|t| t.id.clone())
         .collect();
 
+    let has_unfinished_env = tasks_data
+        .tasks
+        .iter()
+        .any(|task| task.kind.as_deref() == Some("env") && task.state != "done");
+
     let mut filtered = Vec::new();
     for t in &tasks_data.tasks {
         if let Some(st) = &state_filter {
@@ -201,10 +239,8 @@ pub fn run_task_list(
                 continue;
             }
         }
-        if mine {
-            if t.assignee.as_deref() != caller_id {
-                continue;
-            }
+        if mine && t.assignee.as_deref() != caller_id {
+            continue;
         }
         if ready {
             if t.state != "todo" {
@@ -212,6 +248,9 @@ pub fn run_task_list(
             }
             let all_deps_done = t.deps.iter().all(|d| done_set.contains(d));
             if !all_deps_done {
+                continue;
+            }
+            if t.kind.as_deref() != Some("env") && has_unfinished_env {
                 continue;
             }
         }
@@ -263,6 +302,11 @@ pub fn run_task_claim(ctx: &Context, task_id_opt: Option<String>) -> Result<Comm
             .map(|t| t.id.clone())
             .collect();
 
+        let has_unfinished_env = tasks_data
+            .tasks
+            .iter()
+            .any(|task| task.kind.as_deref() == Some("env") && task.state != "done");
+
         let chosen_id = match task_id_opt {
             Some(id) => {
                 let t = tasks_data
@@ -277,6 +321,9 @@ pub fn run_task_claim(ctx: &Context, task_id_opt: Option<String>) -> Result<Comm
                 if !all_deps_done {
                     return Err(format!("Task {} has unfinished dependencies", id));
                 }
+                if t.kind.as_deref() != Some("env") && has_unfinished_env {
+                    return Err(format!("Task {} is gated by unfinished env tasks. Complete env tasks first.", id));
+                }
                 id
             }
             None => {
@@ -284,7 +331,11 @@ pub fn run_task_claim(ctx: &Context, task_id_opt: Option<String>) -> Result<Comm
                 let mut candidates: Vec<&Task> = tasks_data
                     .tasks
                     .iter()
-                    .filter(|t| t.state == "todo" && t.deps.iter().all(|d| done_set.contains(d)))
+                    .filter(|t| {
+                        t.state == "todo"
+                            && t.deps.iter().all(|d| done_set.contains(d))
+                            && (t.kind.as_deref() == Some("env") || !has_unfinished_env)
+                    })
                     .collect();
 
                 if candidates.is_empty() {
@@ -438,7 +489,13 @@ pub fn run_task_done(
             .find(|t| t.id == task_id)
             .ok_or_else(|| format!("Task {} not found", task_id))?;
 
-        let commit_hash = commit_opt.or_else(|| task.commit_hash.clone());
+        let commit_hash = commit_opt.or_else(|| task.commit_hash.clone()).or_else(|| {
+            if task.kind.as_deref() == Some("env") {
+                Some("env".to_string())
+            } else {
+                None
+            }
+        });
         let hash = commit_hash.ok_or_else(|| {
             format!(
                 "Task {} has no recorded commit hash. Commit your changes via 'naantree commit' first or pass --commit <hash>.",
@@ -592,6 +649,7 @@ pub fn run_task_split(
                 summary: None,
                 created_at: now,
                 updated_at: now,
+                kind: parent.kind.clone(),
             };
             tasks_data.tasks.push(subtask);
             created.push(new_id);

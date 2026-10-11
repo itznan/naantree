@@ -87,16 +87,18 @@ pub fn run_review_result(
         let messages: Vec<Message> = ctx.store.read_jsonl("messages.jsonl");
         let mut updated_messages = Vec::new();
         for mut m in messages {
-            if m.ref_id == task_id && m.msg_type == "REVIEW-REQUEST" && m.needs_ack {
-                if !m.ack_by.contains(&agent_id) {
-                    m.ack_by.push(agent_id.clone());
-                }
+            if m.ref_id == task_id
+                && m.msg_type == "REVIEW-REQUEST"
+                && m.needs_ack
+                && !m.ack_by.contains(&agent_id)
+            {
+                m.ack_by.push(agent_id.clone());
             }
             updated_messages.push(m);
         }
         let target_file = ctx.state_dir.join("messages.jsonl");
         let tmp = ctx.state_dir.join(format!("messages.tmp.{}.{}", std::process::id(), current_time_ms()));
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).open(&tmp) {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp) {
             for m in &updated_messages {
                 if let Ok(mut line) = serde_json::to_string(m) {
                     line.push('\n');
@@ -152,23 +154,87 @@ pub fn run_gate_set(ctx: &Context, cmd: String) -> Result<CommandOutput, String>
             return Err("Only the coordinator can configure the verification gate (gate set).".to_string());
         }
 
+        // Run baseline check once
+        let output = if cfg!(windows) {
+            Command::new("cmd")
+                .arg("/C")
+                .arg(&cmd)
+                .current_dir(&ctx.repo_root)
+                .output()
+        } else {
+            Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .current_dir(&ctx.repo_root)
+                .output()
+        }
+        .map_err(|e| format!("Failed to execute gate command for baseline check: {}", e))?;
+
+        let pass = output.status.success();
+        let code = output.status.code().unwrap_or(if pass { 0 } else { 1 });
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}{}", stdout, stderr);
+
+        let lines_out: Vec<&str> = combined.lines().collect();
+        let last_30 = if lines_out.len() > 30 {
+            lines_out[lines_out.len() - 30..].join("\n")
+        } else {
+            combined.clone()
+        };
+
+        let result = GateResult {
+            pass,
+            cmd: cmd.clone(),
+            output: last_30.clone(),
+            exit_code: code,
+            timestamp: current_time_ms(),
+        };
+
         let mut meta = ctx.store.load_meta();
         meta.gate_cmd = Some(cmd.clone());
+        meta.gate_last_result = Some(result);
         ctx.store.save_meta(&meta)?;
 
         let _ = ctx.store.log_event(
             "gate_set",
             Some(&agent_id),
-            serde_json::json!({ "cmd": cmd }),
+            serde_json::json!({
+                "cmd": cmd,
+                "baseline_pass": pass,
+                "baseline_exit_code": code
+            }),
         );
 
-        Ok(CommandOutput::new()
-            .line(format!("gate_cmd=\"{}\" coordinator={}", cmd, agent_id))
+        let baseline_status = if pass { "PASS" } else { "FAIL" };
+        let mut out = CommandOutput::new();
+        out = out.line(format!(
+            "gate_cmd=\"{}\" coordinator={} baseline={}",
+            cmd, agent_id, baseline_status
+        ));
+        out = out.line(format!("gate_baseline={} exit_code={}", baseline_status, code));
+        for l in last_30.lines() {
+            out = out.line(l.to_string());
+        }
+
+        let next_hint = if pass {
+            "naantree status"
+        } else {
+            "naantree task add --kind env"
+        };
+
+        Ok(out
             .json(&serde_json::json!({
                 "gate_cmd": cmd,
-                "coordinator": agent_id
+                "coordinator": agent_id,
+                "baseline": {
+                    "pass": pass,
+                    "status": baseline_status,
+                    "exit_code": code,
+                    "output": last_30
+                }
             }))
-            .next("naantree gate run"))
+            .next(next_hint))
     })
 }
 
@@ -454,16 +520,95 @@ pub fn run_doctor(ctx: &Context) -> Result<CommandOutput, String> {
         lines.push("[INFO] Pre-commit hook not installed (run 'naantree hooks install')".to_string());
     }
 
-    lines.push("doctor=PASS".to_string());
+    // 6. Swarm Invariant Checks
+    let agents_data = ctx.store.load_agents();
+    let claims_data = ctx.store.load_claims();
+    let stale_timeout_ms = crate::core::store::get_stale_timeout_ms();
+    let now = current_time_ms();
+    let mut violations = Vec::new();
 
-    Ok(CommandOutput::new()
-        .lines(lines)
-        .json(&serde_json::json!({
-            "doctor": "PASS",
-            "git": true,
-            "lock_healthy": !lock_dir.exists()
-        }))
-        .next("naantree join"))
+    // 6a. Coordinator invariants (at most one, at least one if swarm active)
+    let live_coordinators: Vec<&crate::core::store::Agent> = agents_data
+        .agents
+        .iter()
+        .filter(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none())
+        .collect();
+
+    if live_coordinators.len() > 1 {
+        let ids: Vec<&str> = live_coordinators.iter().map(|a| a.id.as_str()).collect();
+        violations.push(format!("Multiple live coordinators detected: {}", ids.join(", ")));
+    }
+
+    if !agents_data.agents.is_empty() && live_coordinators.is_empty() {
+        violations.push("No live coordinator exists in swarm".to_string());
+    }
+
+    // 6b. Ghost agents (heartbeat older than timeout and never resumed)
+    for a in &agents_data.agents {
+        if a.left_at.is_some() {
+            continue;
+        }
+        let age_ms = now.saturating_sub(a.last_heartbeat);
+        if age_ms > stale_timeout_ms && (!a.is_stale || a.last_heartbeat <= a.joined_at) {
+            violations.push(format!(
+                "Ghost agent detected: {} (heartbeat age {}s > {}s, not resumed)",
+                a.id,
+                age_ms / 1000,
+                stale_timeout_ms / 1000
+            ));
+        }
+    }
+
+    // 6c. Agents with dead recorded PID
+    for a in &agents_data.agents {
+        if !a.is_stale && a.left_at.is_none() && !crate::core::context::is_pid_alive(a.pid) {
+            violations.push(format!(
+                "Agent {} is recorded as alive but recorded PID {} is dead",
+                a.id, a.pid
+            ));
+        }
+    }
+
+    // 6d. Claims owned by stale agents
+    for claim in &claims_data.claims {
+        let owner = agents_data.agents.iter().find(|a| a.id == claim.agent_id);
+        match owner {
+            Some(a) if a.is_stale || a.left_at.is_some() => {
+                violations.push(format!(
+                    "Claim {} on paths {:?} is held by stale agent {}",
+                    claim.id, claim.paths, claim.agent_id
+                ));
+            }
+            None => {
+                violations.push(format!(
+                    "Claim {} on paths {:?} is held by non-existent agent {}",
+                    claim.id, claim.paths, claim.agent_id
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    if violations.is_empty() {
+        lines.push("[OK] Swarm invariants verified (no violations)".to_string());
+        lines.push("doctor=PASS".to_string());
+
+        Ok(CommandOutput::new()
+            .lines(lines)
+            .json(&serde_json::json!({
+                "doctor": "PASS",
+                "git": true,
+                "lock_healthy": !lock_dir.exists(),
+                "violations": []
+            }))
+            .next("naantree join"))
+    } else {
+        for v in &violations {
+            lines.push(format!("[FAIL] {}", v));
+        }
+        lines.push("doctor=FAIL".to_string());
+        Err(lines.join("\n"))
+    }
 }
 
 pub fn run_reset(ctx: &Context, confirm: bool) -> Result<CommandOutput, String> {
