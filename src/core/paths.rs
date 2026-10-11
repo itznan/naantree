@@ -93,16 +93,14 @@ pub fn paths_overlap(p1: &str, p2: &str) -> bool {
     let base1 = get_glob_base(&n1);
     let base2 = get_glob_base(&n2);
 
-    if !base1.is_empty() && !base2.is_empty() {
-        if base1 == base2
+    if !base1.is_empty()
+        && !base2.is_empty()
+        && (base1 == base2
             || base1.starts_with(&(base2.clone() + "/"))
-            || base2.starts_with(&(base1.clone() + "/"))
-        {
-            // If both are wildcard patterns under the same directory, check potential collision
-            if (n1.contains('*') || n1.contains('?')) && (n2.contains('*') || n2.contains('?')) {
-                return true;
-            }
-        }
+            || base2.starts_with(&(base1.clone() + "/")))
+        && ((n1.contains('*') || n1.contains('?')) && (n2.contains('*') || n2.contains('?')))
+    {
+        return true;
     }
 
     false

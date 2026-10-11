@@ -1,5 +1,8 @@
 use clap::Parser;
-use naantree::cli::{Cli, Commands, GateSubcommand, HooksSubcommand, PlanSubcommand, ReviewSubcommand, TaskSubcommand};
+use naantree::cli::{
+    Cli, Commands, CoordinatorSubcommand, GateSubcommand, HooksSubcommand, PlanSubcommand,
+    ReviewSubcommand, TaskSubcommand,
+};
 use naantree::cmds;
 use naantree::core::context::Context;
 
@@ -8,7 +11,8 @@ fn main() {
     let json_mode = cli.json;
     let verbose = cli.verbose;
 
-    let ctx = match Context::init(cli.r#as) {
+    let is_doctor = matches!(cli.command, Commands::Doctor);
+    let ctx = match Context::init(cli.r#as, cli.session.clone(), !is_doctor) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error initializing context: {}", e);
@@ -20,9 +24,13 @@ fn main() {
         Commands::Join {
             role_hint,
             tags,
-            session,
             resume,
-        } => cmds::lifecycle::run_join(&ctx, role_hint, tags, session, resume),
+            force,
+        } => cmds::lifecycle::run_join(&ctx, role_hint, tags, cli.session, resume, force),
+
+        Commands::Coordinator { cmd } => match cmd {
+            CoordinatorSubcommand::Claim => cmds::lifecycle::run_coordinator_claim(&ctx),
+        },
 
         Commands::Whoami => cmds::lifecycle::run_whoami(&ctx),
 
@@ -46,7 +54,8 @@ fn main() {
                 size,
                 for_agent,
                 reviewers,
-            } => cmds::task::run_task_add(&ctx, title, desc, tags, paths, deps, size, for_agent, reviewers),
+                kind,
+            } => cmds::task::run_task_add(&ctx, title, desc, tags, paths, deps, size, for_agent, reviewers, kind),
             TaskSubcommand::Accept { id } => cmds::task::run_task_accept(&ctx, id),
             TaskSubcommand::List { state, mine, ready } => cmds::task::run_task_list(&ctx, state, mine, ready),
             TaskSubcommand::Claim { id } => cmds::task::run_task_claim(&ctx, id),

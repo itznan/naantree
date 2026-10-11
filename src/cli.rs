@@ -6,6 +6,9 @@ pub struct Cli {
     #[arg(long, global = true, help = "Run as specified agent ID")]
     pub r#as: Option<String>,
 
+    #[arg(long, global = true, help = "Session key for identity resolution")]
+    pub session: Option<String>,
+
     #[arg(long, global = true, help = "Output structured JSON")]
     pub json: bool,
 
@@ -25,9 +28,15 @@ pub enum Commands {
         #[arg(long)]
         tags: Option<String>,
         #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
         resume: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
+
+    #[command(about = "Coordinator operations")]
+    Coordinator {
+        #[command(subcommand)]
+        cmd: CoordinatorSubcommand,
     },
 
     #[command(about = "Display caller identity")]
@@ -223,6 +232,8 @@ pub enum TaskSubcommand {
         for_agent: Option<String>,
         #[arg(long)]
         reviewers: Option<usize>,
+        #[arg(long)]
+        kind: Option<String>,
     },
 
     #[command(about = "Accept proposed task")]
@@ -313,3 +324,10 @@ pub enum GateSubcommand {
     #[command(about = "Run verification command under lock")]
     Run,
 }
+
+#[derive(Subcommand, Debug)]
+pub enum CoordinatorSubcommand {
+    #[command(about = "Claim the coordinator role if the current coordinator is stale")]
+    Claim,
+}
+

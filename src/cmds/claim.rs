@@ -10,13 +10,13 @@ use crate::core::store::Claim;
 pub fn parse_ttl_ms(ttl: Option<String>) -> u64 {
     if let Some(s) = ttl {
         let trimmed = s.trim();
-        if trimmed.ends_with('m') {
-            if let Ok(mins) = trimmed[..trimmed.len() - 1].parse::<u64>() {
+        if let Some(stripped) = trimmed.strip_suffix('m') {
+            if let Ok(mins) = stripped.parse::<u64>() {
                 return mins * 60 * 1000;
             }
         }
-        if trimmed.ends_with('s') {
-            if let Ok(secs) = trimmed[..trimmed.len() - 1].parse::<u64>() {
+        if let Some(stripped) = trimmed.strip_suffix('s') {
+            if let Ok(secs) = stripped.parse::<u64>() {
                 return secs * 1000;
             }
         }

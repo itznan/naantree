@@ -8,6 +8,12 @@ pub struct CommandOutput {
     pub next_hint: Option<String>,
 }
 
+impl Default for CommandOutput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandOutput {
     pub fn new() -> Self {
         Self {

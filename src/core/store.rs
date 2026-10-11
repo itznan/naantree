@@ -8,7 +8,14 @@ use uuid::Uuid;
 use super::ids::{extract_id_num, next_evt_id};
 use super::lock::current_time_ms;
 
-pub const DEFAULT_AGENT_STALE_MS: u64 = 300_000; // 5 minutes
+pub const DEFAULT_AGENT_STALE_MS: u64 = 90_000; // 90 seconds (1.5 minutes)
+
+pub fn get_stale_timeout_ms() -> u64 {
+    std::env::var("NAANTREE_STALE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_AGENT_STALE_MS)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
@@ -56,6 +63,8 @@ pub struct Task {
     pub summary: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -267,10 +276,7 @@ impl Store {
     }
 
     pub fn reap_dead_agents(&self) -> Result<Vec<String>, String> {
-        let stale_timeout_ms = std::env::var("NAANTREE_STALE_TIMEOUT_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_AGENT_STALE_MS);
+        let stale_timeout_ms = get_stale_timeout_ms();
 
         let mut agents_data = self.load_agents();
         let now = current_time_ms();
@@ -328,22 +334,54 @@ impl Store {
 
         // 3. Promote lowest-id alive agent if coordinator was reaped
         if coordinator_was_reaped {
-            let mut alive_candidates: Vec<&mut Agent> = agents_data
+            let already_has_live_coordinator = agents_data
                 .agents
-                .iter_mut()
-                .filter(|a| !a.is_stale && a.left_at.is_none())
-                .collect();
+                .iter()
+                .any(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none());
 
-            alive_candidates.sort_by_key(|a| extract_id_num(&a.id).unwrap_or(u64::MAX));
+            if !already_has_live_coordinator {
+                let mut alive_candidates: Vec<&mut Agent> = agents_data
+                    .agents
+                    .iter_mut()
+                    .filter(|a| !a.is_stale && a.left_at.is_none())
+                    .collect();
 
-            if let Some(promoted) = alive_candidates.first_mut() {
-                promoted.role = "coordinator".to_string();
+                alive_candidates.sort_by_key(|a| extract_id_num(&a.id).unwrap_or(u64::MAX));
+
+                if let Some(promoted) = alive_candidates.first_mut() {
+                    promoted.role = "coordinator".to_string();
+                    let _ = self.log_event(
+                        "coordinator_promoted",
+                        Some(&promoted.id),
+                        serde_json::json!({
+                            "promoted_agent": promoted.id,
+                            "reason": "dead_coordinator_reaped"
+                        }),
+                    );
+                }
+            }
+        }
+
+        // Invariant: at most one live coordinator
+        let mut live_coordinators: Vec<usize> = agents_data
+            .agents
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.role == "coordinator" && !a.is_stale && a.left_at.is_none())
+            .map(|(idx, _)| idx)
+            .collect();
+        if live_coordinators.len() > 1 {
+            live_coordinators.sort_by_key(|&idx| extract_id_num(&agents_data.agents[idx].id).unwrap_or(u64::MAX));
+            for &idx in &live_coordinators[1..] {
+                agents_data.agents[idx].role = "worker".to_string();
+                let demoted_id = agents_data.agents[idx].id.clone();
                 let _ = self.log_event(
-                    "coordinator_promoted",
-                    Some(&promoted.id),
+                    "coordinator_demoted",
+                    Some(&demoted_id),
                     serde_json::json!({
-                        "promoted_agent": promoted.id,
-                        "reason": "dead_coordinator_reaped"
+                        "id": demoted_id,
+                        "reason": "enforce_single_coordinator_invariant",
+                        "new_role": "worker"
                     }),
                 );
             }

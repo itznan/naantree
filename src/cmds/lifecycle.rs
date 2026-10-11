@@ -1,5 +1,7 @@
 use std::fs;
-use crate::core::context::{get_session_key, Context};
+use crate::core::context::{
+    get_grandparent_pid, get_parent_pid, get_session_key, get_tty_name, Context,
+};
 use crate::core::format::CommandOutput;
 use crate::core::ids::{extract_id_num, next_agent_id};
 use crate::core::lock::{current_time_ms, with_lock};
@@ -11,38 +13,119 @@ pub fn run_join(
     tags: Option<String>,
     session_opt: Option<String>,
     resume: Option<String>,
+    force: bool,
 ) -> Result<CommandOutput, String> {
     with_lock(&ctx.state_dir, "join", || {
         let _ = ctx.store.reap_dead_agents();
         let mut agents_data = ctx.store.load_agents();
         let now = current_time_ms();
+        let ppid = get_parent_pid();
 
         // Check resume
         if let Some(res_id) = resume {
-            if let Some(agent) = agents_data.agents.iter_mut().find(|a| a.id == res_id) {
-                agent.is_stale = false;
-                agent.left_at = None;
-                agent.last_heartbeat = now;
-                agent.pid = std::process::id();
-                let role = agent.role.clone();
-                let id = agent.id.clone();
-                ctx.store.save_agents(&agents_data)?;
-                let _ = ctx.store.log_event(
-                    "agent_resumed",
-                    Some(&id),
-                    serde_json::json!({ "id": id, "role": role }),
-                );
+            // Check if another live coordinator exists
+            let other_live_coordinator = agents_data
+                .agents
+                .iter()
+                .any(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none() && a.id != res_id);
 
-                return Ok(CommandOutput::new()
-                    .line(format!("agent={} role={} status=resumed pid={}", id, role, std::process::id()))
-                    .json(&serde_json::json!({
-                        "agent": id,
-                        "role": role,
-                        "status": "resumed",
-                        "pid": std::process::id()
-                    }))
-                    .next("naantree status"));
+            let agent = agents_data
+                .agents
+                .iter_mut()
+                .find(|a| a.id == res_id)
+                .ok_or_else(|| format!("Agent {} not found to resume", res_id))?;
+
+            if !agent.is_stale && agent.left_at.is_none() && !force {
+                return Err(format!(
+                    "Agent {} is currently alive. Use --force to resume anyway.",
+                    res_id
+                ));
             }
+
+            let mut was_demoted = false;
+            if agent.role == "coordinator" && other_live_coordinator {
+                agent.role = "worker".to_string();
+                was_demoted = true;
+                let _ = ctx.store.log_event(
+                    "coordinator_demoted",
+                    Some(&res_id),
+                    serde_json::json!({
+                        "id": res_id,
+                        "reason": "superseded_by_existing_coordinator",
+                        "new_role": "worker"
+                    }),
+                );
+            } else if !other_live_coordinator && agent.role != "coordinator" {
+                agent.role = "coordinator".to_string();
+                let _ = ctx.store.log_event(
+                    "coordinator_promoted",
+                    Some(&res_id),
+                    serde_json::json!({
+                        "promoted_agent": res_id,
+                        "reason": "resume_no_coordinator_alive"
+                    }),
+                );
+            }
+
+            agent.is_stale = false;
+            agent.left_at = None;
+            agent.last_heartbeat = now;
+            agent.pid = ppid;
+            let role = agent.role.clone();
+            let id = agent.id.clone();
+            ctx.store.save_agents(&agents_data)?;
+
+            // Write session files
+            let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", ppid)), &id);
+            let _ = fs::write(ctx.state_dir.join(format!("me.{}", ppid)), &id);
+            if let Some(gppid) = get_grandparent_pid(ppid) {
+                let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", gppid)), &id);
+                let _ = fs::write(ctx.state_dir.join(format!("me.{}", gppid)), &id);
+            }
+            if let Some(tty) = get_tty_name() {
+                let _ = fs::write(ctx.state_dir.join(format!("me.tty_{}", tty)), &id);
+                let _ = fs::write(ctx.state_dir.join(format!("me.{}", tty)), &id);
+            }
+            let session_key = session_opt.or_else(get_session_key);
+            if let Some(key) = &session_key {
+                let _ = fs::write(ctx.state_dir.join(format!("me.{}", key)), &id);
+            }
+
+            let _ = ctx.store.log_event(
+                "agent_resumed",
+                Some(&id),
+                serde_json::json!({ "id": id, "role": role, "pid": ppid }),
+            );
+
+            let coordinator_alive = agents_data
+                .agents
+                .iter()
+                .any(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none());
+
+            let mut out = CommandOutput::new();
+            out = out.line(format!(
+                "agent={} role={} coordinator_alive={} status=resumed pid={}",
+                id, role, coordinator_alive, ppid
+            ));
+            if was_demoted {
+                out = out.line(format!(
+                    "(Resumed coordinator {} demoted to worker because another live coordinator exists)",
+                    id
+                ));
+            }
+            out = out.line(format!("prefix=--as {}", id));
+            out = out.line(format!("Pass --as {} on every command", id));
+
+            return Ok(out
+                .json(&serde_json::json!({
+                    "agent": id,
+                    "role": role,
+                    "coordinator_alive": coordinator_alive,
+                    "status": "resumed",
+                    "prefix": format!("--as {}", id),
+                    "pid": ppid
+                }))
+                .next("naantree status"));
         }
 
         let existing_ids: Vec<String> = agents_data.agents.iter().map(|a| a.id.clone()).collect();
@@ -72,7 +155,7 @@ pub fn run_join(
             role: role.clone(),
             tags: tag_list.clone(),
             role_hint: role_hint.clone(),
-            pid: std::process::id(),
+            pid: ppid,
             joined_at: now,
             last_heartbeat: now,
             left_at: None,
@@ -82,11 +165,20 @@ pub fn run_join(
         agents_data.agents.push(new_agent);
         ctx.store.save_agents(&agents_data)?;
 
-        // Write session file if session key is detected or provided
+        // Write session files
+        let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", ppid)), &agent_id);
+        let _ = fs::write(ctx.state_dir.join(format!("me.{}", ppid)), &agent_id);
+        if let Some(gppid) = get_grandparent_pid(ppid) {
+            let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", gppid)), &agent_id);
+            let _ = fs::write(ctx.state_dir.join(format!("me.{}", gppid)), &agent_id);
+        }
+        if let Some(tty) = get_tty_name() {
+            let _ = fs::write(ctx.state_dir.join(format!("me.tty_{}", tty)), &agent_id);
+            let _ = fs::write(ctx.state_dir.join(format!("me.{}", tty)), &agent_id);
+        }
         let session_key = session_opt.or_else(get_session_key);
         if let Some(key) = &session_key {
-            let session_file = ctx.state_dir.join(format!("me.{}", key));
-            let _ = fs::write(session_file, &agent_id);
+            let _ = fs::write(ctx.state_dir.join(format!("me.{}", key)), &agent_id);
         }
 
         let _ = ctx.store.log_event(
@@ -96,34 +188,89 @@ pub fn run_join(
                 "agent": agent_id,
                 "role": role,
                 "tags": tag_list,
-                "pid": std::process::id()
+                "pid": ppid
             }),
         );
 
         let mut out = CommandOutput::new();
         out = out.line(format!(
-            "agent={} role={} pid={} tags={}",
+            "agent={} role={} coordinator_alive=true pid={} tags={}",
             agent_id,
             role,
-            std::process::id(),
+            ppid,
             tag_list.join(",")
         ));
-
-        if session_key.is_none() {
-            out = out.line(format!(
-                "(Pass --as {} or set NAANTREE_AGENT={} on future commands)",
-                agent_id, agent_id
-            ));
-        }
+        out = out.line(format!("prefix=--as {}", agent_id));
+        out = out.line(format!("Pass --as {} on every command", agent_id));
 
         Ok(out
             .json(&serde_json::json!({
                 "agent": agent_id,
                 "role": role,
+                "coordinator_alive": true,
+                "prefix": format!("--as {}", agent_id),
                 "tags": tag_list,
-                "pid": std::process::id()
+                "pid": ppid
             }))
             .next("naantree status"))
+    })
+}
+
+pub fn run_coordinator_claim(ctx: &Context) -> Result<CommandOutput, String> {
+    let agent_id = ctx.require_agent()?;
+    with_lock(&ctx.state_dir, "coordinator_claim", || {
+        let _ = ctx.store.reap_dead_agents()?;
+        let mut agents_data = ctx.store.load_agents();
+        let now = current_time_ms();
+
+        // Check if another live coordinator exists
+        if let Some(live_coord) = agents_data
+            .agents
+            .iter()
+            .find(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none() && a.id != agent_id)
+        {
+            return Err(format!(
+                "Cannot claim coordinator role: active coordinator '{}' is still alive",
+                live_coord.id
+            ));
+        }
+
+        let caller = agents_data
+            .agents
+            .iter_mut()
+            .find(|a| a.id == agent_id)
+            .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+
+        let was_already_coord = caller.role == "coordinator";
+        caller.role = "coordinator".to_string();
+        caller.last_heartbeat = now;
+        caller.is_stale = false;
+        caller.left_at = None;
+        ctx.store.save_agents(&agents_data)?;
+
+        if !was_already_coord {
+            let _ = ctx.store.log_event(
+                "coordinator_promoted",
+                Some(&agent_id),
+                serde_json::json!({
+                    "promoted_agent": agent_id,
+                    "reason": "coordinator_claim"
+                }),
+            );
+        }
+
+        Ok(CommandOutput::new()
+            .line(format!(
+                "agent={} role=coordinator coordinator_alive=true status=claimed",
+                agent_id
+            ))
+            .json(&serde_json::json!({
+                "agent": agent_id,
+                "role": "coordinator",
+                "coordinator_alive": true,
+                "status": "claimed"
+            }))
+            .next("naantree plan init --goal \"<description>\""))
     })
 }
 

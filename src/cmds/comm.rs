@@ -191,7 +191,7 @@ pub fn run_ack(ctx: &Context, msg_id: String) -> Result<CommandOutput, String> {
         // Rewrite messages.jsonl
         let target = ctx.state_dir.join("messages.jsonl");
         let tmp = ctx.state_dir.join(format!("messages.tmp.{}.{}", std::process::id(), current_time_ms()));
-        let mut file = OpenOptions::new().create(true).write(true).open(&tmp).map_err(|e| e.to_string())?;
+        let mut file = OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).map_err(|e| e.to_string())?;
         for m in &updated_messages {
             let mut line = serde_json::to_string(m).map_err(|e| e.to_string())?;
             line.push('\n');
@@ -309,10 +309,19 @@ pub fn run_wait(
                     .map(|t| t.id.clone())
                     .collect();
 
+                let has_unfinished_env = tasks_data
+                    .tasks
+                    .iter()
+                    .any(|task| task.kind.as_deref() == Some("env") && task.state != "done");
+
                 let ready_task = tasks_data
                     .tasks
                     .iter()
-                    .find(|t| t.state == "todo" && t.deps.iter().all(|d| done_set.contains(d)));
+                    .find(|t| {
+                        t.state == "todo"
+                            && t.deps.iter().all(|d| done_set.contains(d))
+                            && (t.kind.as_deref() == Some("env") || !has_unfinished_env)
+                    });
 
                 if let Some(t) = ready_task {
                     return Ok(Some(format!(
@@ -340,11 +349,28 @@ pub fn run_wait(
                 }
             }
 
+            // 5. Check coordinator
+            if cond == "coordinator" {
+                if let Some(coord) = agents_data
+                    .agents
+                    .iter()
+                    .find(|a| a.role == "coordinator" && !a.is_stale && a.left_at.is_none())
+                {
+                    return Ok(Some(format!("event=coordinator id={} alive=true", coord.id)));
+                }
+            }
+
             Ok(None)
         })?;
 
         if let Some(event_str) = check_res {
-            let next_hint = if event_str.contains("event=task") {
+            let next_hint = if event_str.contains("event=coordinator") {
+                if event_str.contains(&format!("id={}", agent_id)) {
+                    "naantree plan init --goal \"<description>\""
+                } else {
+                    "naantree wait --for task"
+                }
+            } else if event_str.contains("event=task") {
                 "naantree task claim"
             } else if event_str.contains("event=message") {
                 "naantree inbox --unread"
