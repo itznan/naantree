@@ -167,7 +167,32 @@ impl Store {
         ));
         let content = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
         fs::write(&tmp, content).map_err(|e| format!("Failed to write tmp file: {}", e))?;
-        fs::rename(&tmp, &target).map_err(|e| format!("Failed to rename file: {}", e))?;
+
+        if let Err(e) = fs::rename(&tmp, &target) {
+            // On Windows, replacing an existing file can fail transiently with ERROR_ACCESS_DENIED (5)
+            // or ERROR_SHARING_VIOLATION (32) if the destination was recently touched or inspected.
+            let mut succeeded = false;
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                let _ = fs::remove_file(&target);
+                if fs::rename(&tmp, &target).is_ok() {
+                    succeeded = true;
+                    break;
+                }
+            }
+            if !succeeded {
+                if fs::copy(&tmp, &target).is_ok() {
+                    let _ = fs::remove_file(&tmp);
+                } else {
+                    return Err(format!(
+                        "Failed to rename {} to {}: {}",
+                        tmp.display(),
+                        target.display(),
+                        e
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 

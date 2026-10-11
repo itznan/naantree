@@ -191,18 +191,26 @@ fn test_simulated_crash_recovery_dead_agent_in_doing_state() {
     .unwrap();
 
     // Now Coordinator runs status, which triggers auto_reap
-    let (code, _out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "status"]);
-    assert_eq!(code, 0);
+    let (code, _out, err) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "status"]);
+    assert_eq!(code, 0, "status failed: {}\n{}", _out, err);
 
     // Task-1 must have returned to todo!
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "task", "list"]);
-    assert_eq!(code, 0);
-    assert!(out.contains("id=task-1") && out.contains("todo"));
+    let (code, out, err) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "task", "list"]);
+    assert_eq!(code, 0, "task list failed: {}\n{}", out, err);
+    assert!(
+        out.contains("id=task-1") && out.contains("todo"),
+        "Expected task-1 to return to todo, got output:\n{}",
+        out
+    );
 
     // Claims must be empty / released
-    let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "claims"]);
-    assert_eq!(code, 0);
-    assert!(out.contains("claims=0") || out.contains("no claims"));
+    let (code, out, err) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "claims"]);
+    assert_eq!(code, 0, "claims failed: {}\n{}", out, err);
+    assert!(
+        out.contains("claims=0") || out.contains("no claims"),
+        "Expected claims to be released, got output:\n{}",
+        out
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
