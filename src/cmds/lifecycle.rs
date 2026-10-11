@@ -66,20 +66,45 @@ pub fn run_join(
                 );
             }
 
+            let start_time = crate::core::context::get_process_start_time(ppid);
             agent.is_stale = false;
             agent.left_at = None;
             agent.last_heartbeat = now;
             agent.pid = ppid;
+            if start_time.is_some() {
+                agent.pid_start_time = start_time;
+            }
             let role = agent.role.clone();
             let id = agent.id.clone();
             ctx.store.save_agents(&agents_data)?;
 
-            // Write session files
-            let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", ppid)), &id);
-            let _ = fs::write(ctx.state_dir.join(format!("me.{}", ppid)), &id);
+            // Write session files with start-time for PID recycling protection
+            let pid_session_content = match start_time {
+                Some(st) => format!("{}:{}", id, st),
+                None => id.clone(),
+            };
+            let _ = fs::write(
+                ctx.state_dir.join(format!("me.pid_{}", ppid)),
+                &pid_session_content,
+            );
+            let _ = fs::write(
+                ctx.state_dir.join(format!("me.{}", ppid)),
+                &pid_session_content,
+            );
             if let Some(gppid) = get_grandparent_pid(ppid) {
-                let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", gppid)), &id);
-                let _ = fs::write(ctx.state_dir.join(format!("me.{}", gppid)), &id);
+                let gp_start_time = crate::core::context::get_process_start_time(gppid);
+                let gp_session_content = match gp_start_time {
+                    Some(st) => format!("{}:{}", id, st),
+                    None => id.clone(),
+                };
+                let _ = fs::write(
+                    ctx.state_dir.join(format!("me.pid_{}", gppid)),
+                    &gp_session_content,
+                );
+                let _ = fs::write(
+                    ctx.state_dir.join(format!("me.{}", gppid)),
+                    &gp_session_content,
+                );
             }
             if let Some(tty) = get_tty_name() {
                 let _ = fs::write(ctx.state_dir.join(format!("me.tty_{}", tty)), &id);
@@ -149,12 +174,14 @@ pub fn run_join(
             .filter(|s| !s.is_empty())
             .collect();
 
+        let start_time = crate::core::context::get_process_start_time(ppid);
         let new_agent = Agent {
             id: agent_id.clone(),
             role: role.clone(),
             tags: tag_list.clone(),
             role_hint: role_hint.clone(),
             pid: ppid,
+            pid_start_time: start_time,
             joined_at: now,
             last_heartbeat: now,
             left_at: None,
@@ -164,12 +191,33 @@ pub fn run_join(
         agents_data.agents.push(new_agent);
         ctx.store.save_agents(&agents_data)?;
 
-        // Write session files
-        let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", ppid)), &agent_id);
-        let _ = fs::write(ctx.state_dir.join(format!("me.{}", ppid)), &agent_id);
+        // Write session files with start-time for PID recycling protection
+        let pid_session_content = match start_time {
+            Some(st) => format!("{}:{}", agent_id, st),
+            None => agent_id.clone(),
+        };
+        let _ = fs::write(
+            ctx.state_dir.join(format!("me.pid_{}", ppid)),
+            &pid_session_content,
+        );
+        let _ = fs::write(
+            ctx.state_dir.join(format!("me.{}", ppid)),
+            &pid_session_content,
+        );
         if let Some(gppid) = get_grandparent_pid(ppid) {
-            let _ = fs::write(ctx.state_dir.join(format!("me.pid_{}", gppid)), &agent_id);
-            let _ = fs::write(ctx.state_dir.join(format!("me.{}", gppid)), &agent_id);
+            let gp_start_time = crate::core::context::get_process_start_time(gppid);
+            let gp_session_content = match gp_start_time {
+                Some(st) => format!("{}:{}", agent_id, st),
+                None => agent_id.clone(),
+            };
+            let _ = fs::write(
+                ctx.state_dir.join(format!("me.pid_{}", gppid)),
+                &gp_session_content,
+            );
+            let _ = fs::write(
+                ctx.state_dir.join(format!("me.{}", gppid)),
+                &gp_session_content,
+            );
         }
         if let Some(tty) = get_tty_name() {
             let _ = fs::write(ctx.state_dir.join(format!("me.tty_{}", tty)), &agent_id);
@@ -320,10 +368,16 @@ pub fn run_heartbeat(ctx: &Context) -> Result<CommandOutput, String> {
     with_lock(&ctx.state_dir, &agent_id, || {
         let mut agents_data = ctx.store.load_agents();
         let now = current_time_ms();
+        let ppid = crate::core::context::get_parent_pid();
+        let start_time = crate::core::context::get_process_start_time(ppid);
         let mut found = false;
         for a in &mut agents_data.agents {
             if a.id == agent_id {
                 a.last_heartbeat = now;
+                a.pid = ppid;
+                if start_time.is_some() {
+                    a.pid_start_time = start_time;
+                }
                 a.is_stale = false;
                 found = true;
                 break;

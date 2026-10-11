@@ -24,6 +24,8 @@ pub struct Agent {
     pub tags: Vec<String>,
     pub role_hint: Option<String>,
     pub pid: u32,
+    #[serde(default)]
+    pub pid_start_time: Option<u64>,
     pub joined_at: u64,
     pub last_heartbeat: u64,
     pub left_at: Option<u64>,
@@ -286,14 +288,19 @@ impl Store {
         let mut coordinator_was_reaped = false;
 
         for agent in &mut agents_data.agents {
-            if !agent.is_stale
-                && agent.left_at.is_none()
-                && now.saturating_sub(agent.last_heartbeat) > stale_timeout_ms
-            {
-                agent.is_stale = true;
-                reaped.push(agent.id.clone());
-                if agent.role == "coordinator" {
-                    coordinator_was_reaped = true;
+            if !agent.is_stale && agent.left_at.is_none() {
+                let heartbeat_expired = now.saturating_sub(agent.last_heartbeat) > stale_timeout_ms;
+                let process_dead = if agent.pid_start_time.is_some() {
+                    !crate::core::context::is_pid_alive_matching(agent.pid, agent.pid_start_time)
+                } else {
+                    false
+                };
+                if heartbeat_expired || process_dead {
+                    agent.is_stale = true;
+                    reaped.push(agent.id.clone());
+                    if agent.role == "coordinator" {
+                        coordinator_was_reaped = true;
+                    }
                 }
             }
         }

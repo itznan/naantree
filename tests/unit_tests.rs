@@ -77,6 +77,7 @@ fn test_dead_agent_reaping() {
                 tags: vec![],
                 role_hint: None,
                 pid: 1234,
+                pid_start_time: None,
                 joined_at: now - 500_000,
                 last_heartbeat: now - 400_000, // > 300s -> stale
                 left_at: None,
@@ -88,6 +89,7 @@ fn test_dead_agent_reaping() {
                 tags: vec![],
                 role_hint: None,
                 pid: 5678,
+                pid_start_time: None,
                 joined_at: now,
                 last_heartbeat: now,
                 left_at: None,

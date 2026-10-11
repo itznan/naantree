@@ -2,6 +2,7 @@
 name = "naantree"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.75.0"
 license = "MIT"
 description = "Modular multi-agent coordination protocol and CLI for autonomous coding swarms"
 repository = "https://github.com/itznan/naantree"

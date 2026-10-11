@@ -1,6 +1,6 @@
 use crate::core::context::Context;
 use crate::core::format::CommandOutput;
-use crate::core::git::get_short_head;
+use crate::core::git::{get_short_head, run_git_cmd};
 use crate::core::lock::{current_time_ms, with_lock};
 use crate::core::store::{Decision, Event, GateResult, Message, TaskReview};
 use std::fs;
@@ -270,22 +270,61 @@ pub fn run_gate_run(ctx: &Context) -> Result<CommandOutput, String> {
     };
 
     let initial_head = get_short_head(&ctx.repo_root).ok();
+    let dirty_check = run_git_cmd(&ctx.repo_root, &["status", "--porcelain"], &[])
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
 
-    // Run gate command outside the global lock
-    let output = if cfg!(windows) {
+    let timeout_secs: u64 = std::env::var("NAANTREE_GATE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+
+    // Run gate command outside the global lock with timeout
+    let mut child = if cfg!(windows) {
         Command::new("cmd")
             .arg("/C")
             .arg(&gate_cmd)
             .current_dir(&ctx.repo_root)
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
     } else {
         Command::new("sh")
             .arg("-c")
             .arg(&gate_cmd)
             .current_dir(&ctx.repo_root)
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
     }
     .map_err(|e| format!("Failed to execute gate command: {}", e))?;
+
+    let start_wait = std::time::Instant::now();
+    let mut finished = false;
+    while start_wait.elapsed().as_secs() < timeout_secs {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                finished = true;
+                break;
+            }
+            Ok(None) => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Error monitoring gate process: {}", e)),
+        }
+    }
+
+    if !finished {
+        let _ = child.kill();
+        return Err(format!(
+            "Gate command timed out after {}s and was killed.",
+            timeout_secs
+        ));
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to read gate command output: {}", e))?;
 
     let pass = output.status.success();
     let code = output.status.code().unwrap_or(if pass { 0 } else { 1 });
@@ -309,20 +348,17 @@ pub fn run_gate_run(ctx: &Context) -> Result<CommandOutput, String> {
         git_head: initial_head.clone(),
     };
 
+    let mut head_drifted = false;
+    let mut recorded_head = initial_head.clone();
+
     with_lock(&ctx.state_dir, &agent_id, || {
         let current_head = get_short_head(&ctx.repo_root).ok();
         if initial_head != current_head {
-            return Err(format!(
-                "Repository HEAD changed during gate run (was {:?}, now {:?}). Discarding stale gate result. Please re-run.",
-                initial_head, current_head
-            ));
+            head_drifted = true;
+            recorded_head = current_head.clone();
         }
 
         let mut meta = ctx.store.load_meta();
-        if meta.gate_cmd.as_deref() != Some(&gate_cmd) {
-            return Err("Gate command was reconfigured during execution. Discarding stale gate result. Please re-run.".to_string());
-        }
-
         meta.gate_last_result = Some(result);
         ctx.store.save_meta(&meta)?;
 
@@ -333,7 +369,9 @@ pub fn run_gate_run(ctx: &Context) -> Result<CommandOutput, String> {
                 "cmd": gate_cmd,
                 "pass": pass,
                 "exit_code": code,
-                "git_head": current_head
+                "git_head": initial_head,
+                "current_head": current_head,
+                "head_drifted": head_drifted
             }),
         );
         Ok(())
@@ -342,6 +380,16 @@ pub fn run_gate_run(ctx: &Context) -> Result<CommandOutput, String> {
     let status_str = if pass { "PASS" } else { "FAIL" };
     let mut out = CommandOutput::new();
     out = out.line(format!("gate={} exit_code={}", status_str, code));
+    if dirty_check {
+        out = out.line("[WARN] Working tree contains uncommitted modifications during gate run");
+    }
+    if head_drifted {
+        out = out.line(format!(
+            "[NOTE] Repository HEAD moved during gate run (ran on {}, latest is {}). Run gate again on latest commit before finish.",
+            initial_head.as_deref().unwrap_or("none"),
+            recorded_head.as_deref().unwrap_or("none")
+        ));
+    }
     for l in last_30.lines() {
         out = out.line(l.to_string());
     }
@@ -632,7 +680,10 @@ pub fn run_doctor(ctx: &Context) -> Result<CommandOutput, String> {
 
     // 6c. Agents with dead recorded PID
     for a in &agents_data.agents {
-        if !a.is_stale && a.left_at.is_none() && !crate::core::context::is_pid_alive(a.pid) {
+        if !a.is_stale
+            && a.left_at.is_none()
+            && !crate::core::context::is_pid_alive_matching(a.pid, a.pid_start_time)
+        {
             violations.push(format!(
                 "Agent {} is recorded as alive but recorded PID {} is dead",
                 a.id, a.pid

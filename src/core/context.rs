@@ -33,10 +33,15 @@ impl Context {
                     let mut agents_data = store.load_agents();
                     let mut updated = false;
                     let now = current_time_ms();
+                    let ppid = get_parent_pid();
+                    let start_time = get_process_start_time(ppid);
                     for a in &mut agents_data.agents {
                         if a.id == *id && !a.is_stale && a.left_at.is_none() {
                             a.last_heartbeat = now;
-                            a.pid = get_parent_pid();
+                            a.pid = ppid;
+                            if start_time.is_some() {
+                                a.pid_start_time = start_time;
+                            }
                             updated = true;
                             break;
                         }
@@ -225,7 +230,19 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        Path::new(&format!("/proc/{}", pid)).exists()
+        let stat_path = format!("/proc/{}/stat", pid);
+        if let Ok(content) = fs::read_to_string(&stat_path) {
+            if let Some(idx) = content.rfind(')') {
+                let rest = content[idx + 1..].trim();
+                if let Some(state) = rest.chars().next() {
+                    // 'Z' indicates zombie process (terminated but not reaped by parent)
+                    return state != 'Z';
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
     #[cfg(windows)]
     {
@@ -373,6 +390,32 @@ fn read_id_from_file(path: &Path) -> Option<String> {
         if let Ok(content) = fs::read_to_string(path) {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
+                if let Some((id, _)) = trimmed.split_once(':') {
+                    return Some(id.to_string());
+                }
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn read_pid_session_file(path: &Path, expected_pid: u32) -> Option<String> {
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(path) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                if let Some((id, start_time_str)) = trimmed.split_once(':') {
+                    if let Ok(recorded_time) = start_time_str.parse::<u64>() {
+                        if let Some(current_time) = get_process_start_time(expected_pid) {
+                            if recorded_time != current_time {
+                                // Process creation time does not match: PID was recycled by the OS!
+                                return None;
+                            }
+                        }
+                    }
+                    return Some(id.to_string());
+                }
                 return Some(trimmed.to_string());
             }
         }
@@ -424,17 +467,18 @@ pub fn resolve_agent_id(
 
     // 3c. Session file keyed by parent PID or grandparent PID
     let ppid = get_parent_pid();
-    if let Some(id) = read_id_from_file(&state_dir.join(format!("me.pid_{}", ppid))) {
+    if let Some(id) = read_pid_session_file(&state_dir.join(format!("me.pid_{}", ppid)), ppid) {
         return Some(id);
     }
-    if let Some(id) = read_id_from_file(&state_dir.join(format!("me.{}", ppid))) {
+    if let Some(id) = read_pid_session_file(&state_dir.join(format!("me.{}", ppid)), ppid) {
         return Some(id);
     }
     if let Some(gppid) = get_grandparent_pid(ppid) {
-        if let Some(id) = read_id_from_file(&state_dir.join(format!("me.pid_{}", gppid))) {
+        if let Some(id) = read_pid_session_file(&state_dir.join(format!("me.pid_{}", gppid)), gppid)
+        {
             return Some(id);
         }
-        if let Some(id) = read_id_from_file(&state_dir.join(format!("me.{}", gppid))) {
+        if let Some(id) = read_pid_session_file(&state_dir.join(format!("me.{}", gppid)), gppid) {
             return Some(id);
         }
     }

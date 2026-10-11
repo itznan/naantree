@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn run_cmd(dir: &Path, bin: &str, args: &[&str]) -> (i32, String, String) {
     let out = Command::new(bin)
         .current_dir(dir)
+        .env("NAANTREE_STALE_LOCK_MS", "300")
+        .env("NAANTREE_LOCK_TIMEOUT_MS", "2000")
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("Failed to run {} {:?}: {}", bin, args, e));
@@ -42,7 +44,7 @@ fn create_temp_repo(prefix: &str) -> (PathBuf, String) {
 }
 
 #[test]
-fn test_crash_recovery_abandoned_lock() {
+fn test_simulated_crash_recovery_abandoned_lock() {
     let (temp_dir, bin) = create_temp_repo("abandoned_lock");
 
     // Initialize state directory
@@ -73,7 +75,7 @@ fn test_crash_recovery_abandoned_lock() {
 }
 
 #[test]
-fn test_crash_recovery_leftover_git_index_lock() {
+fn test_simulated_crash_recovery_leftover_git_index_lock() {
     let (temp_dir, bin) = create_temp_repo("git_index_lock");
 
     // Agent joins and claims a file
@@ -119,7 +121,7 @@ fn test_crash_recovery_leftover_git_index_lock() {
 }
 
 #[test]
-fn test_crash_recovery_dead_agent_in_doing_state() {
+fn test_simulated_crash_recovery_dead_agent_in_doing_state() {
     let (temp_dir, bin) = create_temp_repo("dead_agent_doing");
 
     // Coordinator joins
@@ -201,6 +203,105 @@ fn test_crash_recovery_dead_agent_in_doing_state() {
     let (code, out, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "claims"]);
     assert_eq!(code, 0);
     assert!(out.contains("claims=0") || out.contains("no claims"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_real_sigkill_mid_commit_and_write_recovery() {
+    let (temp_dir, bin) = create_temp_repo("real_sigkill");
+
+    // Agent joins as coordinator
+    let (code, _, _) = run_cmd(&temp_dir, &bin, &["join"]);
+    assert_eq!(code, 0);
+
+    // Run 15 real process executions interrupted with SIGKILL at microsecond/millisecond intervals
+    for i in 0..15 {
+        let filename = format!("churn_{}.txt", i);
+        let filepath = temp_dir.join(&filename);
+        let _ = fs::write(&filepath, format!("content {}\n", i));
+
+        // Claim file
+        let _ = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "claim", &filename]);
+
+        // Spawn naantree commit child process
+        let mut child = Command::new(&bin)
+            .current_dir(&temp_dir)
+            .env("NAANTREE_STALE_LOCK_MS", "300")
+            .env("NAANTREE_LOCK_TIMEOUT_MS", "2000")
+            .args([
+                "--as",
+                "agent-1",
+                "commit",
+                "-m",
+                &format!("churn commit {}", i),
+                "--files",
+                &filename,
+            ])
+            .spawn()
+            .unwrap();
+
+        // Kill at varying intervals: 1ms to 15ms
+        let delay_ms = (i % 15) + 1;
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+        // Abruptly terminate process (SIGKILL on Unix, TerminateProcess on Windows)
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    // After 15 abrupt process kills, verify state files are valid uncorrupted JSON/JSONL
+    let state_dir = temp_dir.join(".naantree").join("state");
+    if state_dir.join("agents.json").exists() {
+        let content = fs::read_to_string(state_dir.join("agents.json")).unwrap();
+        let _: serde_json::Value =
+            serde_json::from_str(&content).expect("agents.json must be valid JSON");
+    }
+    if state_dir.join("claims.json").exists() {
+        let content = fs::read_to_string(state_dir.join("claims.json")).unwrap();
+        let _: serde_json::Value =
+            serde_json::from_str(&content).expect("claims.json must be valid JSON");
+    }
+    if state_dir.join("tasks.json").exists() {
+        let content = fs::read_to_string(state_dir.join("tasks.json")).unwrap();
+        let _: serde_json::Value =
+            serde_json::from_str(&content).expect("tasks.json must be valid JSON");
+    }
+    if state_dir.join("events.jsonl").exists() {
+        let content = fs::read_to_string(state_dir.join("events.jsonl")).unwrap();
+        for line in content.lines() {
+            if !line.trim().is_empty() {
+                let _: serde_json::Value =
+                    serde_json::from_str(line).expect("events.jsonl lines must be valid JSON");
+            }
+        }
+    }
+
+    // Clean commit recovery on the repository
+    let final_file = "final_recovered.txt";
+    fs::write(temp_dir.join(final_file), "final recovered data\n").unwrap();
+    let (code, _, _) = run_cmd(&temp_dir, &bin, &["--as", "agent-1", "claim", final_file]);
+    assert_eq!(code, 0);
+
+    let (code, out, err) = run_cmd(
+        &temp_dir,
+        &bin,
+        &[
+            "--as",
+            "agent-1",
+            "commit",
+            "-m",
+            "clean recovery commit after 15 sigkills",
+            "--files",
+            final_file,
+        ],
+    );
+    assert_eq!(
+        code, 0,
+        "Clean commit must succeed after SIGKILL churn: {}",
+        err
+    );
+    assert!(out.contains("commit="));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
