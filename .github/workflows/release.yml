@@ -1,7 +1,11 @@
 name: Release
 
 on:
+  release:
+    types: [published, created]
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -9,7 +13,7 @@ on:
       tag_name:
         description: 'Tag name for the release (e.g. v0.1.0)'
         required: false
-        default: 'v0.1.0'
+        default: ''
 
 permissions:
   contents: write
@@ -83,19 +87,22 @@ jobs:
       - name: Determine tag name
         id: release_tag
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           elif [ -n "${{ inputs.tag_name }}" ]; then
             echo "tag=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=v0.1.0" >> $GITHUB_OUTPUT
+            CARGO_VER=$(grep '^version' Cargo.toml | head -1 | cut -d '"' -f 2)
+            echo "tag=v${CARGO_VER}" >> $GITHUB_OUTPUT
           fi
 
       - name: Display files to release
         run: |
           ls -la release-assets/
 
-      - name: Create Release
+      - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
