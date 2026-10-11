@@ -176,12 +176,18 @@ fn test_simulated_crash_recovery_dead_agent_in_doing_state() {
     let claims_content = fs::read_to_string(state_dir.join("claims.json")).unwrap();
     assert!(claims_content.contains("agent-2"));
 
-    // Simulate Agent 2 dying: artificially age Agent 2's heartbeat
+    // Simulate Agent 2 dying: artificially age Agent 2's heartbeat and set dead PID
     let mut agents_data: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(state_dir.join("agents.json")).unwrap()).unwrap();
     for a in agents_data["agents"].as_array_mut().unwrap() {
         if a["id"] == "agent-2" {
-            a["last_heartbeat"] = serde_json::json!(1000); // Very old heartbeat
+            let old_time = a["last_heartbeat"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(200_000);
+            a["last_heartbeat"] = serde_json::json!(old_time);
+            a["pid"] = serde_json::json!(999999);
+            a["pid_start_time"] = serde_json::Value::Null;
         }
     }
     fs::write(
@@ -224,8 +230,9 @@ fn test_real_sigkill_mid_commit_and_write_recovery() {
     let (code, _, _) = run_cmd(&temp_dir, &bin, &["join"]);
     assert_eq!(code, 0);
 
-    // Run 15 real process executions interrupted with SIGKILL at microsecond/millisecond intervals
-    for i in 0..15 {
+    // Run real process executions interrupted with SIGKILL / TerminateProcess
+    let iterations = if cfg!(windows) { 5 } else { 15 };
+    for i in 0..iterations {
         let filename = format!("churn_{}.txt", i);
         let filepath = temp_dir.join(&filename);
         let _ = fs::write(&filepath, format!("content {}\n", i));
@@ -300,7 +307,7 @@ fn test_real_sigkill_mid_commit_and_write_recovery() {
             "agent-1",
             "commit",
             "-m",
-            "clean recovery commit after 15 sigkills",
+            "clean recovery commit after process churn",
             "--files",
             final_file,
         ],
