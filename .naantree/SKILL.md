@@ -13,7 +13,7 @@ CLI alias: `naantree` (written below as `nt`).
 2. Run `nt join` (optionally with `--tags <tags>` or `--role-hint <hint>`).
 3. **TRUST YOUR JOIN OUTPUT**: Inspect the printed `role=coordinator|worker` and `coordinator_alive=true|false`. Do NOT assume agent-1 is the coordinator or guess roles from the user prompt. Role is decided by liveness.
 4. **ALWAYS PASS `--as agent-N`**: Tool calls execute in fresh subshells where environment variables (like `export NAANTREE_AGENT`) do not persist. Use the assigned prefix `--as agent-N` on every single command (e.g. `nt --as agent-N status`).
-5. **USE `--json` FOR STRUCTURED PARSING**: For programmatic consumption, pass `--json` (e.g. `nt --json status`, `nt --as agent-N --json inbox`, `nt --as agent-N --json task list`) to receive stable, machine-readable JSON instead of parsing human text.
+5. **USE `--json` FOR STRUCTURED PARSING**: For programmatic consumption, pass `--json` (e.g. `nt --json status`, `nt --as agent-N --json inbox`, `nt --as agent-N --json diff`, `nt --as agent-N --json task list`) to receive stable, machine-readable JSON instead of parsing human text.
 6. Run `nt --as agent-N status` to inspect current swarm state.
 
 ### 3. IF YOU ARE THE COORDINATOR (`role=coordinator`)
@@ -36,7 +36,7 @@ CLI alias: `naantree` (written below as `nt`).
 1. Check inbox: `nt --as agent-N inbox --unread` (or `nt --as agent-N --json inbox`). If unread needs-ack messages exist, answer or ack them: `nt --as agent-N ack <msgid>`.
 2. Claim a ready task: `nt --as agent-N task claim` (auto-claims the best matching task and its path globs).
 3. Work exclusively inside your claimed paths. Do not touch unclaimed files.
-4. Run your local test/build check to verify your changes.
+4. Run your local test/build check to verify your changes. Optionally run `nt --as agent-N diff` to confirm edits remain within your claimed paths.
 5. Commit staged changes: `nt --as agent-N commit -m "<concise message>" --files <paths>`.
 6. Request peer review: `nt --as agent-N review request <taskId>`.
 7. After another agent approves your review, mark task done: `nt --as agent-N task done <taskId> --summary "<summary>"`.

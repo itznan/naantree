@@ -11,6 +11,26 @@ Official Skill Package: [github.com/itznan/naantree-skill](https://github.com/it
 
 ---
 
+## Installation
+
+### Standalone CLI Binary (Recommended)
+
+Install the pre-built `naantree` CLI binary for your platform:
+
+**Linux & macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/itznan/naantree/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/itznan/naantree/main/install.ps1 | iex
+```
+
+*Pre-built binaries for Linux (`x86_64`), macOS (`x86_64`, `arm64/aarch64`), and Windows (`x86_64`) are also available on [GitHub Releases](https://github.com/itznan/naantree/releases).*
+
+---
+
 ## Installation via `skills.sh`
 
 You can install the `naantree` skill directly into your AI coding agents using `npx skills`:

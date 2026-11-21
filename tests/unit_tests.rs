@@ -1,8 +1,11 @@
+use naantree::cmds::git_cmds::run_diff;
+use naantree::core::context::Context;
 use naantree::core::ids::{extract_id_num, next_agent_id, next_claim_id, next_task_id};
 use naantree::core::lock::{acquire_lock, current_time_ms};
 use naantree::core::paths::{file_matches_pattern, normalize_path, paths_overlap};
-use naantree::core::store::{Agent, Store, Task};
+use naantree::core::store::{Agent, Claim, ClaimsData, Store, Task};
 use std::fs;
+use std::process::Command;
 
 #[test]
 fn test_ids() {
@@ -137,6 +140,194 @@ fn test_dead_agent_reaping() {
     let updated_agents = store.load_agents();
     assert!(updated_agents.agents[0].is_stale);
     assert_eq!(updated_agents.agents[1].role, "coordinator");
+
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
+#[test]
+fn test_skills_in_sync() {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let naantree_skill =
+        fs::read_to_string(manifest_dir.join(".naantree").join("SKILL.md")).unwrap();
+    let agent_skill = fs::read_to_string(
+        manifest_dir
+            .join(".agent")
+            .join("skills")
+            .join("naantree")
+            .join("SKILL.md"),
+    )
+    .unwrap();
+    let agents_skill = fs::read_to_string(
+        manifest_dir
+            .join(".agents")
+            .join("skills")
+            .join("naantree")
+            .join("SKILL.md"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        naantree_skill, agent_skill,
+        ".naantree/SKILL.md and .agent/skills/naantree/SKILL.md must be identical"
+    );
+    assert_eq!(
+        naantree_skill, agents_skill,
+        ".naantree/SKILL.md and .agents/skills/naantree/SKILL.md must be identical"
+    );
+}
+
+#[test]
+fn test_diff_within_and_outside_claims() {
+    let temp_dir = std::env::temp_dir().join(format!("naantree_test_diff_{}", current_time_ms()));
+    let _ = fs::create_dir_all(&temp_dir);
+
+    // Initialize git repository with main branch
+    let git_init = Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&temp_dir)
+        .output()
+        .expect("git init failed");
+    assert!(git_init.status.success());
+
+    let _ = Command::new("git")
+        .args(["config", "user.name", "Tester"])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["config", "user.email", "tester@example.com"])
+        .current_dir(&temp_dir)
+        .output();
+
+    // Initial commit
+    fs::write(temp_dir.join("init.txt"), "init").unwrap();
+    fs::write(temp_dir.join(".gitignore"), ".naantree/\n").unwrap();
+    let _ = Command::new("git")
+        .args(["add", "init.txt", ".gitignore"])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(&temp_dir)
+        .output();
+
+    let state_dir = temp_dir.join(".naantree").join("state");
+    let store = Store::new(state_dir.clone());
+    let now = current_time_ms();
+
+    // Setup active claims:
+    // agent-1 owns "src/auth/**"
+    // agent-2 owns "src/payment/**"
+    let claims = ClaimsData {
+        claims: vec![
+            Claim {
+                id: "claim-1".into(),
+                agent_id: "agent-1".into(),
+                paths: vec!["src/auth/**".into()],
+                task_id: Some("task-1".into()),
+                shared: false,
+                ttl_ms: 600_000,
+                created_at: now,
+                expires_at: now + 600_000,
+                queue: vec![],
+            },
+            Claim {
+                id: "claim-2".into(),
+                agent_id: "agent-2".into(),
+                paths: vec!["src/payment/**".into()],
+                task_id: Some("task-2".into()),
+                shared: false,
+                ttl_ms: 600_000,
+                created_at: now,
+                expires_at: now + 600_000,
+                queue: vec![],
+            },
+        ],
+    };
+    store.save_claims(&claims).unwrap();
+
+    let ctx = Context {
+        repo_root: temp_dir.clone(),
+        state_dir,
+        store,
+        agent_id: Some("agent-1".into()),
+    };
+
+    // Before making changes: run_diff reports 0 modified files
+    let diff_clean = run_diff(&ctx, false).unwrap();
+    assert_eq!(diff_clean.json_val.as_ref().unwrap()["total"], 0);
+    assert_eq!(
+        diff_clean.json_val.as_ref().unwrap()["within_claims"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        diff_clean.json_val.as_ref().unwrap()["outside_claims"],
+        serde_json::json!([])
+    );
+
+    // Create 3 files:
+    // 1. src/auth/login.rs (within agent-1 claim)
+    // 2. src/payment/checkout.rs (outside agent-1 claim, claimed by agent-2)
+    // 3. docs/readme.txt (outside agent-1 claim, unclaimed)
+    fs::create_dir_all(temp_dir.join("src").join("auth")).unwrap();
+    fs::create_dir_all(temp_dir.join("src").join("payment")).unwrap();
+    fs::create_dir_all(temp_dir.join("docs")).unwrap();
+
+    fs::write(temp_dir.join("src/auth/login.rs"), "fn login() {}").unwrap();
+    fs::write(temp_dir.join("src/payment/checkout.rs"), "fn pay() {}").unwrap();
+    fs::write(temp_dir.join("docs/readme.txt"), "readme").unwrap();
+
+    // Unstaged diff (default)
+    let diff_all = run_diff(&ctx, false).unwrap();
+    let json_all = diff_all.json_val.unwrap();
+    assert_eq!(json_all["total"], 3);
+
+    let within: Vec<String> = serde_json::from_value(json_all["within_claims"].clone()).unwrap();
+    let outside: Vec<String> = serde_json::from_value(json_all["outside_claims"].clone()).unwrap();
+
+    assert_eq!(within, vec!["src/auth/login.rs"]);
+    assert!(outside.contains(&"src/payment/checkout.rs".to_string()));
+    assert!(outside.contains(&"docs/readme.txt".to_string()));
+    assert!(json_all["warning"].is_string());
+
+    // Check human output formatting
+    let output_lines = diff_all.lines.join("\n");
+    assert!(output_lines.contains("[within]  src/auth/login.rs"));
+    assert!(output_lines.contains("[outside] src/payment/checkout.rs (claimed by agent-2)"));
+    assert!(output_lines.contains("[outside] docs/readme.txt (unclaimed)"));
+    assert!(output_lines.contains("WARNING:"));
+
+    // Now stage only src/auth/login.rs and src/payment/checkout.rs
+    let _ = Command::new("git")
+        .args(["add", "src/auth/login.rs", "src/payment/checkout.rs"])
+        .current_dir(&temp_dir)
+        .output();
+
+    // Staged-only diff
+    let diff_staged = run_diff(&ctx, true).unwrap();
+    let json_staged = diff_staged.json_val.unwrap();
+    assert_eq!(json_staged["total"], 2);
+
+    let staged_within: Vec<String> =
+        serde_json::from_value(json_staged["within_claims"].clone()).unwrap();
+    let staged_outside: Vec<String> =
+        serde_json::from_value(json_staged["outside_claims"].clone()).unwrap();
+
+    assert_eq!(staged_within, vec!["src/auth/login.rs"]);
+    assert_eq!(staged_outside, vec!["src/payment/checkout.rs"]);
+    assert!(!staged_outside.contains(&"docs/readme.txt".to_string()));
+
+    // Also verify CLI invocation via binary
+    let binary_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_naantree"));
+    let cli_out = Command::new(&binary_path)
+        .current_dir(&temp_dir)
+        .args(["--as", "agent-1", "--json", "diff", "--staged"])
+        .output()
+        .expect("CLI execution failed");
+    assert!(cli_out.status.success());
+    let cli_json: serde_json::Value =
+        serde_json::from_slice(&cli_out.stdout).expect("Valid JSON output from CLI");
+    assert_eq!(cli_json["total"], 2);
+    assert_eq!(cli_json["staged"], true);
 
     let _ = fs::remove_dir_all(temp_dir);
 }

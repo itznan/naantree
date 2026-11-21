@@ -2,9 +2,15 @@
 
 All notable changes to `naantree` will be documented in this file.
 
-## [Unreleased] - 2026-10-11
+## [0.2.0] - 2026-11-21
+
+### Fixed
+- **Windows Process Liveness Check (`is_pid_alive`)**: Fixed `WaitForSingleObject` failure caused by missing `SYNCHRONIZE` access right in `OpenProcess`. Process alive checks and coordinator failover now function correctly on native Windows.
 
 ### Added
+- **`naantree diff` Boundary Guard**: Added `naantree diff` command (with `--staged` support) to check uncommitted git modifications against the caller agent's active path claims. Warns immediately when edits touch unclaimed files or files claimed by other agents before committing.
+- **Cross-Platform Release Matrix & macOS Support**: Added `x86_64-apple-darwin` and `aarch64-apple-darwin` targets to `.github/workflows/release.yml`, generating prebuilt binaries and SHA256 checksums for Apple Silicon and Intel Macs.
+- **Standalone Zero-Rust Installers**: Added `install.sh` (POSIX shell for Linux/macOS) and `install.ps1` (PowerShell for Windows) for automated one-line installation without requiring Rust or Cargo.
 - **Dynamic Role Assignment & Single Coordinator Invariant**:
   - `join` reaps stale agents under lock before identity and role allocation.
   - Role is determined strictly by coordinator liveness (not ID number).

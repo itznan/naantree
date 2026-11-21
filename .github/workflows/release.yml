@@ -28,6 +28,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary_name: naantree
             asset_name: naantree-linux-x86_64.tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: naantree
+            asset_name: naantree-darwin-x86_64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: naantree
+            asset_name: naantree-darwin-aarch64.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: naantree.exe
@@ -52,6 +60,29 @@ jobs:
           tar -czvf ${{ matrix.asset_name }} ${{ matrix.binary_name }}
           cp ${{ matrix.binary_name }} naantree-linux-x86_64
           sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+
+      - name: Package artifact (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} .
+          tar -czvf ${{ matrix.asset_name }} ${{ matrix.binary_name }}
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+          else
+            shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+          fi
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            cp ${{ matrix.binary_name }} naantree-darwin-x86_64
+          elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            cp ${{ matrix.binary_name }} naantree-darwin-aarch64
+            cp ${{ matrix.binary_name }} naantree-darwin-arm64
+            cp ${{ matrix.asset_name }} naantree-darwin-arm64.tar.gz
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum naantree-darwin-arm64.tar.gz > naantree-darwin-arm64.tar.gz.sha256
+            else
+              shasum -a 256 naantree-darwin-arm64.tar.gz > naantree-darwin-arm64.tar.gz.sha256
+            fi
+          fi
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'

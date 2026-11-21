@@ -253,8 +253,15 @@ pub fn is_pid_alive(pid: u32) -> bool {
             GetExitCodeProcess, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
         };
 
+        const SYNCHRONIZE: u32 = 0x00100000;
+
         unsafe {
-            let raw_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            let mut raw_handle =
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+            let has_sync = !raw_handle.is_null();
+            if raw_handle.is_null() {
+                raw_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            }
             if raw_handle.is_null() {
                 let err = GetLastError();
                 return err == ERROR_ACCESS_DENIED;
@@ -263,7 +270,11 @@ pub fn is_pid_alive(pid: u32) -> bool {
             let mut exit_code = 0u32;
             if GetExitCodeProcess(raw_handle, &mut exit_code) != FALSE {
                 if exit_code == STILL_ACTIVE as u32 {
-                    WaitForSingleObject(raw_handle, 0) == WAIT_TIMEOUT
+                    if has_sync {
+                        WaitForSingleObject(raw_handle, 0) == WAIT_TIMEOUT
+                    } else {
+                        true
+                    }
                 } else {
                     false
                 }
@@ -501,4 +512,16 @@ pub fn resolve_agent_id(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_current_pid_alive() {
+        let pid = std::process::id();
+        assert!(is_pid_alive(pid), "Current pid {} should be alive", pid);
+        assert!(!is_pid_alive(99_999_999), "Non-existent pid should be dead");
+    }
 }

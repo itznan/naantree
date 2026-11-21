@@ -90,6 +90,8 @@ fn main() {
 
         Commands::Claims => cmds::claim::run_claims(&ctx),
 
+        Commands::Diff { staged } => cmds::git_cmds::run_diff(&ctx, staged),
+
         Commands::Commit { message, files } => cmds::git_cmds::run_commit(&ctx, message, files),
 
         Commands::Sync => cmds::git_cmds::run_sync(&ctx),

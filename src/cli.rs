@@ -96,6 +96,12 @@ pub enum Commands {
     #[command(about = "List all active claims")]
     Claims,
 
+    #[command(about = "Inspect working tree edits against claimed paths")]
+    Diff {
+        #[arg(long, help = "Inspect only staged changes")]
+        staged: bool,
+    },
+
     #[command(about = "Safely stage, commit, and pull --rebase on a single branch")]
     Commit {
         #[arg(short = 'm', long, required = true)]
